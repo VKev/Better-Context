@@ -1,0 +1,40 @@
+# bv (beads viewer) local config and caches
+.bv/
+
+# Version control
+.git/
+.svn/
+.hg/
+
+# Dependencies
+node_modules/
+vendor/
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Our own output
+.better-context/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Beads database (local state)
+.beads/*.db
+.beads/daemon.*
