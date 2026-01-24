@@ -1,0 +1,12 @@
+{
+  "nodes": ["a.py", "b.py", "c.py", "standalone.py"],
+  "edges": [
+    ["a.py", "c.py"],
+    ["b.py", "a.py"],
+    ["c.py", "b.py"]
+  ],
+  "cycles": [
+    ["a.py", "b.py", "c.py"]
+  ],
+  "comment": "This fixture contains a 3-node cycle: a -> c, c -> b, b -> a"
+}

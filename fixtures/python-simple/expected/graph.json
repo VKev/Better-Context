@@ -1,0 +1,11 @@
+{
+  "nodes": ["main.py", "models.py", "utils.py", "services/__init__.py", "services/auth.py", "tests/test_auth.py"],
+  "edges": [
+    ["main.py", "utils.py"],
+    ["main.py", "models.py"],
+    ["services/__init__.py", "services/auth.py"],
+    ["services/auth.py", "models.py"],
+    ["tests/test_auth.py", "services/auth.py"]
+  ],
+  "cycles": []
+}

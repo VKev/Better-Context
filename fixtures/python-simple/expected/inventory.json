@@ -1,0 +1,12 @@
+{
+  "files": [
+    "main.py",
+    "models.py",
+    "utils.py",
+    "services/__init__.py",
+    "services/auth.py",
+    "tests/test_auth.py"
+  ],
+  "skipped_binary": [],
+  "skipped_ignored": []
+}

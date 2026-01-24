@@ -1,0 +1,12 @@
+{
+  "files": [
+    "index.ts",
+    "types.ts",
+    "utils.ts",
+    "api/index.ts",
+    "api/client.ts",
+    "components/Button.tsx"
+  ],
+  "skipped_binary": [],
+  "skipped_ignored": []
+}
