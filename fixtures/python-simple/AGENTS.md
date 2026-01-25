@@ -10,6 +10,7 @@ fixtures/python-simple module
 
 - `models.py` - 3 exports - 2 dependents
 - `utils.py` - 3 exports - 1 dependents
+- `AGENTS.md` - module
 - `main.py` - 1 exports
 
 

@@ -8,6 +8,7 @@ src/better_context/languages module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `__init__.py` - 8 exports - barrel export
 - `base.py` - 8 exports
 - `go.py` - 1 exports
@@ -67,6 +68,7 @@ src/better_context/languages module
 - `typing` - Dict, List, Optional, Any
 - `__future__` - annotations
 - `typing` - List, Optional, Tuple, Dict, Any
+- `` - compute_semantic_anchor
 - `__future__` - annotations
 - `dataclasses` - dataclass
 - `typing` - Dict, List, Optional, Pattern

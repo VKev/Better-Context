@@ -8,6 +8,7 @@ fixtures/ts-simple/components module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `Button.tsx` - 1 exports
 
 

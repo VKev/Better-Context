@@ -8,6 +8,7 @@ fixtures/python-simple/services module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `__init__.py` - barrel export
 - `auth.py` - 3 exports
 

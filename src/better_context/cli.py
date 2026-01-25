@@ -13,6 +13,7 @@ from typing import List, Optional
 from .config import load_config
 from .manifest import load_manifest, Manifest
 from .orchestrator import Orchestrator, generate_context
+from .staleness import check_staleness, format_staleness_report, load_staleness_info
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -142,13 +143,135 @@ Examples:
         help="Only remove cache files, keep AGENTS.md",
     )
 
+    # --- focus command ---
+    focus_parser = subparsers.add_parser(
+        "focus",
+        help="Generate context centered on a specific file (ego-centric view)",
+    )
+    focus_parser.add_argument(
+        "file",
+        type=str,
+        help="Target file to focus on (relative to project root)",
+    )
+    focus_parser.add_argument(
+        "--depth",
+        "-d",
+        type=int,
+        default=3,
+        help="Maximum graph distance to explore (default: 3)",
+    )
+    focus_parser.add_argument(
+        "--decay",
+        type=float,
+        default=0.8,
+        help="Score decay factor per hop (default: 0.8)",
+    )
+    focus_parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Output file (default: stdout)",
+    )
+    focus_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON instead of Markdown",
+    )
+    focus_parser.add_argument(
+        "--no-tests",
+        action="store_true",
+        help="Exclude test files from output",
+    )
+    focus_parser.add_argument(
+        "--no-types",
+        action="store_true",
+        help="Exclude type definition files from output",
+    )
+
+    # --- verify command ---
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Check if generated context is stale and needs regeneration",
+    )
+    verify_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        dest="verify_verbose",
+        help="Show detailed file changes",
+    )
+    verify_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="verify_json",
+        help="Output as JSON",
+    )
+
+    # --- optimize command ---
+    optimize_parser = subparsers.add_parser(
+        "optimize",
+        help="Select optimal context within token budget",
+    )
+    optimize_parser.add_argument(
+        "--budget",
+        "-b",
+        type=int,
+        default=8000,
+        help="Token budget (default: 8000)",
+    )
+    optimize_parser.add_argument(
+        "--keywords",
+        "-k",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Keywords to boost relevance",
+    )
+    optimize_parser.add_argument(
+        "--task",
+        "-t",
+        type=str,
+        default=None,
+        help="Task description for relevance scoring",
+    )
+    optimize_parser.add_argument(
+        "--algorithm",
+        "-a",
+        choices=["greedy", "knapsack"],
+        default="greedy",
+        help="Optimization algorithm (default: greedy)",
+    )
+    optimize_parser.add_argument(
+        "--diversity",
+        type=float,
+        default=0.3,
+        help="Diversity penalty factor 0-1 (default: 0.3)",
+    )
+    optimize_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="optimize_json",
+        help="Output as JSON",
+    )
+    optimize_parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Output file (default: stdout)",
+    )
+
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Main entry point for the CLI."""
     parser = create_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 1
 
     # Dispatch to command handlers
     command_handlers = {
@@ -158,6 +281,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         "stats": cmd_stats,
         "graph": cmd_graph,
         "clean": cmd_clean,
+        "focus": cmd_focus,
+        "verify": cmd_verify,
+        "optimize": cmd_optimize,
     }
 
     handler = command_handlers.get(args.command)
@@ -474,6 +600,212 @@ def is_generated_agents_md(path: Path) -> bool:
         return 'Auto-generated context for AI agents' in content
     except Exception:
         return False
+
+
+def cmd_focus(args: argparse.Namespace) -> int:
+    """Generate context centered on a specific file."""
+    root = args.root.resolve()
+    target_file = args.file
+    
+    # Normalize target file path
+    if not target_file.startswith(str(root)):
+        # Assume relative path
+        target_path = Path(target_file)
+        if target_path.is_absolute():
+            # Make relative to root
+            try:
+                target_file = str(target_path.relative_to(root))
+            except ValueError:
+                print(f"[error] File {target_file} is not within project root {root}")
+                return 1
+    
+    # Load manifest
+    manifest = load_manifest_or_fail(args)
+    if manifest is None:
+        return 1
+    
+    # Check if target file exists in manifest
+    target_exists = any(f.path == target_file for f in manifest.files)
+    if not target_exists:
+        # Try to find similar paths
+        similar = [f.path for f in manifest.files if target_file in f.path or f.path.endswith(target_file)]
+        if similar:
+            print(f"[error] File '{target_file}' not found in manifest.")
+            print(f"[hint] Did you mean one of these?")
+            for s in similar[:5]:
+                print(f"  - {s}")
+        else:
+            print(f"[error] File '{target_file}' not found in manifest.")
+            print(f"[hint] Run 'better-context scan' first to analyze the codebase.")
+        return 1
+    
+    print(f"[focus] Generating context for {target_file}...")
+    
+    try:
+        from .graph import build_graph_from_edges
+        from .focus import compute_focus_context, generate_focus_markdown, FocusConfig
+        
+        # Rebuild graph from manifest
+        graph = build_graph_from_edges(
+            manifest.graph.edges,
+            manifest.graph.nodes,
+        )
+        
+        # Configure focus mode
+        config = FocusConfig(
+            max_depth=args.depth,
+            decay_factor=args.decay,
+            include_tests=not args.no_tests,
+            include_types=not args.no_types,
+        )
+        
+        # Compute focused context
+        context = compute_focus_context(
+            target_file,
+            graph,
+            manifest.graph.centrality,
+            config,
+        )
+        
+        if args.json:
+            # JSON output
+            import json
+            output_data = {
+                'focal_file': context.focal_file,
+                'total_files': context.total_files_in_neighborhood,
+                'max_depth': context.max_depth_used,
+                'files': [
+                    {
+                        'path': f.path,
+                        'distance': f.distance,
+                        'direction': f.direction,
+                        'centrality': f.centrality,
+                        'score': f.score,
+                        'description': f.description,
+                    }
+                    for f in context.files
+                ],
+                'dependencies': [f.path for f in context.dependencies],
+                'dependents': [f.path for f in context.dependents],
+                'related_tests': [f.path for f in context.related_tests],
+                'shared_types': [f.path for f in context.shared_types],
+            }
+            output = json.dumps(output_data, indent=2)
+        else:
+            # Markdown output
+            output = generate_focus_markdown(context, manifest)
+        
+        if args.output:
+            args.output.write_text(output, encoding='utf-8')
+            print(f"[focus] Written to {args.output}")
+        else:
+            print(output)
+        
+        print(f"[focus] Found {context.total_files_in_neighborhood} files in neighborhood")
+        print(f"[focus] {len(context.dependencies)} dependencies, {len(context.dependents)} dependents")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"[error] Focus analysis failed: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def cmd_optimize(args: argparse.Namespace) -> int:
+    """Select optimal context within token budget."""
+    root = args.root.resolve()
+    
+    # Load manifest
+    manifest = load_manifest_or_fail(args)
+    if manifest is None:
+        return 1
+    
+    print(f"[optimize] Selecting optimal context within {args.budget:,} tokens...")
+    
+    try:
+        from .optimizer import optimize_context, format_optimization_result
+        
+        # Run optimization
+        result = optimize_context(
+            manifest=manifest,
+            centrality=manifest.graph.centrality,
+            budget=args.budget,
+            keywords=args.keywords,
+            task_description=args.task,
+            algorithm=args.algorithm,
+            diversity_penalty=args.diversity,
+        )
+        
+        if getattr(args, 'optimize_json', False):
+            # JSON output
+            output = json.dumps(result.to_dict(), indent=2)
+        else:
+            # Markdown output
+            output = format_optimization_result(result)
+        
+        if args.output:
+            args.output.write_text(output, encoding='utf-8')
+            print(f"[optimize] Written to {args.output}")
+        else:
+            print(output)
+        
+        print(f"\n[optimize] Selected {len(result.selected_chunks)} chunks")
+        print(f"[optimize] Used {result.total_tokens:,} of {result.budget:,} tokens ({result.budget_utilization:.1%})")
+        print(f"[optimize] Total score: {result.total_score:.4f}")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"[error] Optimization failed: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Check if generated context is stale and needs regeneration."""
+    root = args.root.resolve()
+    
+    # Check if staleness info exists
+    info = load_staleness_info(root)
+    if info is None:
+        print("[verify] No staleness info found.")
+        print("[hint] Run 'better-context all' first to generate context with staleness tracking.")
+        return 1
+    
+    try:
+        result = check_staleness(root)
+        
+        if getattr(args, 'verify_json', False):
+            import json
+            output = {
+                'is_stale': result.is_stale,
+                'source_hash': result.source_hash,
+                'previous_hash': result.previous_hash,
+                'changed': result.changed,
+                'added': result.added,
+                'removed': result.removed,
+                'total_changes': result.total_changes,
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            verbose = getattr(args, 'verify_verbose', False)
+            report = format_staleness_report(result, verbose=verbose)
+            print(report)
+        
+        # Return exit code 0 if fresh, 1 if stale
+        return 0 if not result.is_stale else 1
+        
+    except Exception as e:
+        print(f"[error] Staleness check failed: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
 
 
 if __name__ == "__main__":

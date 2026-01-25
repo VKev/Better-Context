@@ -4,6 +4,11 @@ Provides dual-mode parsing: regex fallback (zero deps) + optional tree-sitter.
 
 This module implements the regex-based chunker that works with zero external
 dependencies. It finds function/class boundaries using pattern matching.
+
+Semantic Anchors:
+    Chunks now include a 'semantic_anchor' field - a content-addressable ID
+    based on normalized AST. This ID stays stable when code moves files.
+    See semantic_anchor.py for the implementation details.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from .languages.base import (
     ParseResult,
     generate_chunk_id,
 )
+from .semantic_anchor import compute_semantic_anchor
 
 
 # ============================================================================
@@ -509,6 +515,16 @@ def chunk_file_regex(
         # Extract docstring
         docstring = extract_docstring(lines, marker.line, language)
         
+        # Compute semantic anchor (content-addressable ID)
+        semantic_anchor = compute_semantic_anchor(
+            source=source,
+            start_line=marker.line,
+            end_line=end_line,
+            language=language,
+            name=marker.name,
+            chunk_type=marker.chunk_type,
+        )
+        
         # Create chunk
         chunk = ChunkResult(
             id=generate_chunk_id(path, marker.line, marker.chunk_type, marker.name),
@@ -523,6 +539,7 @@ def chunk_file_regex(
             metadata={
                 'indent': marker.indent,
             },
+            semantic_anchor=semantic_anchor,
         )
         chunks.append(chunk)
         

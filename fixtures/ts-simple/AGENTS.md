@@ -9,6 +9,7 @@ fixtures/ts-simple module
 ## 📂 Contents
 
 - `utils.ts` - 4 exports - 1 dependents
+- `AGENTS.md` - module
 - `index.ts` - barrel export
 - `types.ts` - 5 exports - type definitions
 

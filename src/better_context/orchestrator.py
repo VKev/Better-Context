@@ -35,6 +35,7 @@ from .manifest import (
     MANIFEST_VERSION,
 )
 from .generator import generate_agents_md, GeneratorConfig, GeneratorResult
+from .staleness import save_staleness_info
 
 
 @dataclass
@@ -141,6 +142,20 @@ class Orchestrator:
                 analysis.graph,
                 max_depth=max_depth,
                 output_root=output_root,
+            )
+            
+            # Step 3: Save staleness info for verification
+            # Exclude AGENTS.md files since they are our output, not input
+            file_hashes = {
+                f.path: f.content_hash
+                for f in analysis.inventory.files
+                if not f.path.endswith("AGENTS.md")
+            }
+            save_staleness_info(
+                self.root,
+                file_hashes,
+                analysis.manifest.meta.generated_at,
+                self.config.output_dir,
             )
         
         total_time_ms = int((time.time() - start_time) * 1000)

@@ -2,7 +2,7 @@
 
 from better_context.ignore import (
     should_ignore,
-    fnmatch_extended,
+    _match_pattern,
     load_ignore_patterns,
     DEFAULT_IGNORES,
 )
@@ -32,15 +32,15 @@ def test_should_ignore_negation():
     assert should_ignore("important.txt", patterns) is False
 
 
-def test_fnmatch_extended_directory():
+def test_match_pattern_directory():
     """Test directory pattern matching."""
-    assert fnmatch_extended("node_modules/package/index.js", "node_modules/") is True
-    assert fnmatch_extended("src/node_modules/x.js", "node_modules/") is True
-    assert fnmatch_extended("src/main.py", "node_modules/") is False
+    assert _match_pattern("node_modules/package/index.js", "node_modules/") is True
+    assert _match_pattern("src/node_modules/x.js", "node_modules/") is True
+    assert _match_pattern("src/main.py", "node_modules/") is False
 
 
-def test_fnmatch_extended_glob():
+def test_match_pattern_glob():
     """Test ** glob patterns."""
-    assert fnmatch_extended("src/lib/utils.py", "**/*.py") is True
-    assert fnmatch_extended("main.py", "**/*.py") is True
-    assert fnmatch_extended("src/lib/utils.js", "**/*.py") is False
+    assert _match_pattern("src/lib/utils.py", "**/*.py") is True
+    assert _match_pattern("main.py", "**/*.py") is True
+    assert _match_pattern("src/lib/utils.js", "**/*.py") is False

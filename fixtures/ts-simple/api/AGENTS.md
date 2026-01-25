@@ -8,6 +8,7 @@ fixtures/ts-simple/api module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `client.ts` - 3 exports
 - `index.ts` - barrel export
 

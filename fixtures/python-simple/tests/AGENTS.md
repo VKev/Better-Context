@@ -8,6 +8,7 @@ fixtures/python-simple/tests module
 
 ## 📂 Contents
 
+- `AGENTS.md` - tests
 - `test_auth.py` - 4 exports - tests
 
 

@@ -11,6 +11,7 @@ fixtures/with-cycles module
 - `a.py` - 2 exports - 1 dependents
 - `b.py` - 2 exports - 1 dependents
 - `c.py` - 2 exports - 1 dependents
+- `AGENTS.md` - module
 - `standalone.py` - 3 exports
 
 

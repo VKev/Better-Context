@@ -16,6 +16,7 @@ from .base import (
     ParseResult,
     generate_chunk_id,
 )
+from ..semantic_anchor import compute_semantic_anchor
 
 
 class PythonAdapter:
@@ -109,6 +110,16 @@ class PythonAdapter:
             # Check if exported
             exported = not name.startswith("_")
             
+            # Compute semantic anchor (content-addressable ID)
+            semantic_anchor = compute_semantic_anchor(
+                source=source,
+                start_line=line_num,
+                end_line=end_line,
+                language="python",
+                name=name,
+                chunk_type="class",
+            )
+            
             chunk = ChunkResult(
                 id=generate_chunk_id(path, line_num, "class", name),
                 type="class",
@@ -123,6 +134,7 @@ class PythonAdapter:
                     "bases": bases,
                     "decorators": decorators,
                 },
+                semantic_anchor=semantic_anchor,
             )
             chunks.append(chunk)
             class_contexts.append((line_num, indent, chunk.id))
@@ -165,6 +177,16 @@ class PythonAdapter:
             # Check if exported (public name at module level)
             exported = not name.startswith("_") and chunk_type == "function"
             
+            # Compute semantic anchor (content-addressable ID)
+            semantic_anchor = compute_semantic_anchor(
+                source=source,
+                start_line=line_num,
+                end_line=end_line,
+                language="python",
+                name=name,
+                chunk_type=chunk_type,
+            )
+            
             chunk = ChunkResult(
                 id=generate_chunk_id(path, line_num, chunk_type, name),
                 type=chunk_type,
@@ -181,6 +203,7 @@ class PythonAdapter:
                     "params": params,
                     "return_type": return_type.strip() if return_type else None,
                 },
+                semantic_anchor=semantic_anchor,
             )
             chunks.append(chunk)
         

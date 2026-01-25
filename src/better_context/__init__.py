@@ -66,6 +66,41 @@ from better_context.callgraph import (
     get_callees,
     get_call_graph_stats,
 )
+# Post-MVP: Token Budget Optimizer
+from better_context.optimizer import (
+    ScoredChunk,
+    OptimizationResult,
+    optimize_context,
+    optimize_context_greedy,
+    optimize_context_knapsack,
+    estimate_tokens,
+    estimate_chunk_tokens,
+    calculate_relevance,
+    calculate_diversity_penalty,
+    prepare_chunks,
+    format_optimization_result,
+)
+# Post-MVP: Focus Mode (Ego-Centric Context)
+from better_context.focus import (
+    FocusedFile,
+    FocusedContext,
+    FocusConfig,
+    compute_focus_context,
+    generate_focus_markdown,
+    select_within_budget,
+)
+# Post-MVP: Semantic Anchors (Content-Addressable Chunks)
+from better_context.semantic_anchor import (
+    SemanticAnchor,
+    AnchorMapping,
+    compute_semantic_anchor,
+    compute_signature_anchor,
+    normalize_code,
+    resolve_anchor,
+    update_anchor_mapping,
+    anchor_mapping_to_dict,
+    dict_to_anchor_mapping,
+)
 
 __all__ = [
     "__version__",
@@ -124,4 +159,33 @@ __all__ = [
     "get_callers",
     "get_callees",
     "get_call_graph_stats",
+    # Post-MVP: Token Budget Optimizer
+    "ScoredChunk",
+    "OptimizationResult",
+    "optimize_context",
+    "optimize_context_greedy",
+    "optimize_context_knapsack",
+    "estimate_tokens",
+    "estimate_chunk_tokens",
+    "calculate_relevance",
+    "calculate_diversity_penalty",
+    "prepare_chunks",
+    "format_optimization_result",
+    # Post-MVP: Focus Mode (Ego-Centric Context)
+    "FocusedFile",
+    "FocusedContext",
+    "FocusConfig",
+    "compute_focus_context",
+    "generate_focus_markdown",
+    "select_within_budget",
+    # Post-MVP: Semantic Anchors (Content-Addressable Chunks)
+    "SemanticAnchor",
+    "AnchorMapping",
+    "compute_semantic_anchor",
+    "compute_signature_anchor",
+    "normalize_code",
+    "resolve_anchor",
+    "update_anchor_mapping",
+    "anchor_mapping_to_dict",
+    "dict_to_anchor_mapping",
 ]

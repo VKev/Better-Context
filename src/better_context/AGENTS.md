@@ -12,16 +12,21 @@ src/better_context module
 - `cache.py` - 9 exports - 1 dependents
 - `callgraph.py` - 16 exports - 1 dependents
 - `coupling.py` - 13 exports - 1 dependents
+- `semantic_anchor.py` - 14 exports - 1 dependents
+- `staleness.py` - 10 exports - 1 dependents
+- `AGENTS.md` - module
 - `__init__.py` - barrel export
 - `centrality.py` - 14 exports
 - `chunker.py` - 3 exports
-- `cli.py` - 13 exports
+- `cli.py` - 16 exports
 - `config.py` - 4 exports - configuration
 - `errors.py` - 20 exports
+- `focus.py` - 6 exports
 - `generator.py` - 5 exports
 - `graph.py` - 30 exports
 - `ignore.py` - 5 exports
 - `manifest.py` - 17 exports
+- `optimizer.py` - 11 exports
 - `orchestrator.py` - 5 exports
 - `resolution.py` - 15 exports
 - `scanner.py` - 9 exports
@@ -70,6 +75,9 @@ src/better_context module
 - `better_context.coupling` - (
 - `better_context.architecture` - (
 - `better_context.callgraph` - (
+- `better_context.optimizer` - (
+- `better_context.focus` - (
+- `better_context.semantic_anchor` - (
 - `.graph` - DependencyGraph
 - `.manifest` - FileEntry
 - `.manifest` - FileEntry
@@ -78,12 +86,9 @@ src/better_context module
 - `.graph` - DependencyGraph
 - `re` - *
 - `.languages.base` - (
+- `.semantic_anchor` - compute_semantic_anchor
 - `.config` - load_config
 - `.manifest` - load_manifest, Manifest
-- `.orchestrator` - Orchestrator, generate_context
-- `.graph` - build_graph_from_edges
-- `.graph` - DependencyGraph
-- `.manifest` - FileEntry
 
 
 ### External

@@ -36,6 +36,9 @@ class ChunkResult:
         exported: Whether this symbol is exported/public
         docstring: Extracted docstring/doc comment if present
         metadata: Language-specific extras (decorators, async, static, etc.)
+        semantic_anchor: Content-addressable ID based on normalized AST.
+            This stays stable when code moves files. Format: 16-char hex string.
+            See semantic_anchor.py for details.
     """
     id: str
     type: str
@@ -47,6 +50,7 @@ class ChunkResult:
     exported: bool = False
     docstring: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    semantic_anchor: Optional[str] = None
     
     @property
     def char_count(self) -> int:

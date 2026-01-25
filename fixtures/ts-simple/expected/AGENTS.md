@@ -8,6 +8,7 @@ fixtures/ts-simple/expected module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `inventory.json` - module
 
 

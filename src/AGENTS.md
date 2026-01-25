@@ -8,6 +8,7 @@ Source code
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 
 
 

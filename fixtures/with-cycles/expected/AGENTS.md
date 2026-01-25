@@ -8,6 +8,7 @@ fixtures/with-cycles/expected module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `graph.json` - module
 
 

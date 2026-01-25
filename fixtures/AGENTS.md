@@ -8,6 +8,7 @@ fixtures module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 
 
 

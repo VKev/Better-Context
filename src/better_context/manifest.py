@@ -48,6 +48,7 @@ class ChunkEntry:
     exported: bool = False  # Is this exported?
     docstring: str | None = None  # Extracted docstring
     metadata: dict[str, Any] = field(default_factory=dict)  # Language-specific extras
+    semantic_anchor: str | None = None  # Content-addressable ID (stable across moves)
 
 
 @dataclass
@@ -207,6 +208,7 @@ def dict_to_manifest(data: dict[str, Any]) -> Manifest:
                 exported=c.get("exported", False),
                 docstring=c.get("docstring"),
                 metadata=c.get("metadata", {}),
+                semantic_anchor=c.get("semantic_anchor"),
             )
             for c in f.get("chunks", [])
         ]

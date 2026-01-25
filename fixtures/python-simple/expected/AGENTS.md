@@ -8,6 +8,7 @@ fixtures/python-simple/expected module
 
 ## 📂 Contents
 
+- `AGENTS.md` - module
 - `graph.json` - module
 - `inventory.json` - module
 

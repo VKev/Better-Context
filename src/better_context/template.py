@@ -67,14 +67,14 @@ class SimpleTemplate:
         """
         result = self.template
         
-        # Process if-else conditionals first (before simple if)
+        # Process loops first (so loop variables are available to conditionals)
+        result = self._process_loops(result, context)
+        
+        # Process if-else conditionals
         result = self._process_if_else(result, context)
         
         # Process simple conditionals
         result = self._process_conditionals(result, context)
-        
-        # Process loops
-        result = self._process_loops(result, context)
         
         # Substitute variables last
         result = self._substitute_vars(result, context)

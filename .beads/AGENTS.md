@@ -10,6 +10,7 @@
 
 - `.gitignore` - module
 - `.local_version` - module
+- `AGENTS.md` - module
 - `config.yaml` - configuration
 - `daemon.lock` - module
 - `daemon.log` - module

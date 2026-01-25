@@ -80,6 +80,9 @@ pip install -e ".[dev]"
 | `better-context agents` | Generate AGENTS.md files from manifest |
 | `better-context stats` | Show codebase statistics |
 | `better-context graph` | Export dependency graph |
+| `better-context focus <file>` | Generate context centered on a specific file |
+| `better-context optimize` | Select optimal context within token budget |
+| `better-context verify` | Check if generated context is stale |
 | `better-context clean` | Remove generated files |
 
 ### Examples
@@ -105,6 +108,21 @@ better-context graph -f json > deps.json
 
 # Show statistics as JSON
 better-context stats --json
+
+# Generate focused context for a specific file
+better-context focus src/auth/jwt.py --depth 3
+
+# Focus mode with JSON output
+better-context focus src/api/handler.py --json
+
+# Select optimal context within 8000 token budget
+better-context optimize --budget 8000
+
+# Optimize with keywords to boost relevance
+better-context optimize -b 4000 -k auth user session
+
+# Optimize for a specific task
+better-context optimize -b 8000 --task "implement user authentication"
 
 # Clean only cache files, keep AGENTS.md
 better-context clean --cache-only
@@ -362,6 +380,8 @@ src/better_context/
 ├── centrality.py       # PageRank and cycle detection
 ├── resolution.py       # Import resolution
 ├── generator.py        # AGENTS.md generation
+├── optimizer.py        # Token budget optimizer
+├── semantic_anchor.py  # Content-addressable chunk IDs
 ├── template.py         # Template engine (zero-dep)
 ├── tree.py             # Directory tree builder
 ├── visualize.py        # Graph export (Mermaid, DOT, JSON)
@@ -378,13 +398,162 @@ src/better_context/
 
 ### Post-MVP Features
 
-- **Bridge File Detection**: Use betweenness centrality to find critical connector files
-- **Auto-Generated Architecture Diagrams**: Mermaid diagrams from dependency graph
-- **Focus Mode**: Generate context centered on a specific file
-- **Token Budget Optimizer**: Select optimal context within token limits
+- **Bridge File Detection**: Use betweenness centrality to find critical connector files ✅
+- **Auto-Generated Architecture Diagrams**: Mermaid diagrams from dependency graph ✅
+- **Focus Mode**: Generate context centered on a specific file ✅
+- **Token Budget Optimizer**: Select optimal context within token limits ✅
 - **MCP Server Mode**: Run as a Model Context Protocol server
-- **Semantic Anchors**: Content-addressable chunk IDs that survive refactoring
-- **Context Staleness Detection**: Hash-based verification of generated context
+- **Semantic Anchors**: Content-addressable chunk IDs that survive refactoring ✅
+- **Context Staleness Detection**: Hash-based verification of generated context ✅
+
+## Focus Mode
+
+Focus Mode generates ego-centric context centered on a specific file. Instead of analyzing the entire codebase, it radiates outward from a focal file to find the most relevant context.
+
+### How It Works
+
+1. **Bidirectional BFS**: Explores both dependencies (what the file imports) and dependents (what imports the file)
+2. **Distance-Weighted Scoring**: Files are scored by `centrality × (decay ^ distance)`
+3. **Categorization**: Automatically identifies related tests, type definitions, and shared modules
+
+### Usage
+
+```bash
+# Generate focused context for a file
+better-context focus src/auth/jwt.py
+
+# Limit exploration depth (default: 3)
+better-context focus src/auth/jwt.py --depth 2
+
+# Adjust score decay (default: 0.8)
+better-context focus src/auth/jwt.py --decay 0.5
+
+# Output as JSON for programmatic use
+better-context focus src/auth/jwt.py --json
+
+# Save to file
+better-context focus src/auth/jwt.py -o focus-context.md
+```
+
+### Output
+
+Focus Mode generates a focused AGENTS.md containing:
+
+- **Summary**: Neighborhood size, depth explored, dependency counts
+- **Direct Dependencies**: Files the focal file imports (ranked by relevance)
+- **Direct Dependents**: Files that import the focal file
+- **Extended Neighborhood**: Files 2+ hops away
+- **Related Tests**: Test files in the neighborhood
+- **Shared Types**: Type definition files
+- **Suggested Reading Order**: Optimal sequence for understanding the code
+
+## Token Budget Optimizer
+
+The Token Budget Optimizer selects the mathematically optimal subset of code chunks that fit within a token budget, maximizing value using constrained optimization.
+
+### How It Works
+
+1. **PageRank Weighting**: Chunks are scored by their file's PageRank centrality
+2. **Relevance Scoring**: Optional keyword/task matching boosts relevant chunks
+3. **Diversity Penalty**: Penalizes selecting similar chunks to encourage variety
+4. **Greedy/Knapsack Selection**: Efficient algorithms for budget-constrained selection
+
+### Algorithm
+
+```
+Maximize: Σ(PageRank × relevance × diversity) / tokens_used
+Subject to: tokens_used ≤ budget
+```
+
+### Usage
+
+```bash
+# Select optimal context within 8000 token budget
+better-context optimize --budget 8000
+
+# Boost chunks matching specific keywords
+better-context optimize -b 4000 -k auth user session
+
+# Optimize for a specific task
+better-context optimize -b 8000 --task "implement user authentication"
+
+# Use knapsack algorithm for true optimality
+better-context optimize -b 4000 -a knapsack
+
+# Output as JSON
+better-context optimize -b 8000 --json
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--budget, -b` | Token budget (default: 8000) |
+| `--keywords, -k` | Keywords to boost relevance |
+| `--task, -t` | Task description for relevance scoring |
+| `--algorithm, -a` | `greedy` (default) or `knapsack` |
+| `--diversity` | Diversity penalty factor 0-1 (default: 0.3) |
+| `--json` | Output as JSON |
+| `--output, -o` | Output file path |
+
+### Output
+
+The optimizer outputs a ranked list of chunks with:
+- File path and chunk name
+- Token count and efficiency score
+- PageRank and relevance scores
+- Budget utilization summary
+
+## Semantic Anchors
+
+Semantic Anchors provide content-addressable chunk IDs that survive refactoring. Instead of `file:line`-based references that break when code moves, semantic anchors are derived from `hash(normalized_AST)`.
+
+### How It Works
+
+1. **AST Normalization**: Code is normalized by removing comments, whitespace, and string contents
+2. **Content Hashing**: A SHA-256 hash of the normalized code produces a stable 16-character ID
+3. **Anchor Mapping**: The system tracks anchor → location mappings
+4. **Move Detection**: When code moves, the same anchor maps to the new location
+
+### Benefits
+
+- **Durable Agent Memory**: References to code remain valid across refactoring
+- **Stable Context Links**: Links between context and code survive file reorganization
+- **Change Detection**: Different anchors indicate semantic changes (not just whitespace)
+
+### Example
+
+```python
+# Same anchor regardless of location
+def hello(name: str) -> str:
+    return f"Hello, {name}!"
+
+# semantic_anchor: "a3f2e8c9b1d4a5f7"
+# This stays the same even if the function moves to a different file
+```
+
+### API
+
+```python
+from better_context import compute_semantic_anchor, AnchorMapping
+
+# Compute anchor for a chunk
+anchor = compute_semantic_anchor(
+    source=source_code,
+    start_line=10,
+    end_line=20,
+    language="python",
+    name="hello",
+    chunk_type="function",
+)
+
+# Track anchor locations
+mapping = AnchorMapping()
+update_anchor_mapping(mapping, anchor, "src/utils.py", 10, "src/utils.py:10:function:hello")
+
+# Resolve anchor to current location
+path, line = resolve_anchor(mapping, anchor)
+```
 
 ## Troubleshooting
 
