@@ -1,5 +1,7 @@
 """Tests for ignore module."""
 
+from pathlib import Path
+
 from better_context.ignore import (
     should_ignore,
     _match_pattern,
@@ -44,3 +46,17 @@ def test_match_pattern_glob():
     assert _match_pattern("src/lib/utils.py", "**/*.py") is True
     assert _match_pattern("main.py", "**/*.py") is True
     assert _match_pattern("src/lib/utils.js", "**/*.py") is False
+
+
+def test_ctxignore_overrides_fixture_gitignore(tmp_path: Path):
+    """Fixture .ctxignore should override broader ignore patterns."""
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "uv.lock").write_text("lockfile", encoding="utf-8")
+    (root / "other.lock").write_text("lockfile", encoding="utf-8")
+    (root / ".ctxignore").write_text("*.lock\n!uv.lock\n", encoding="utf-8")
+
+    patterns = load_ignore_patterns(root)
+
+    assert should_ignore("other.lock", patterns) is True
+    assert should_ignore("uv.lock", patterns) is False

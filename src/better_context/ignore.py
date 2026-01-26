@@ -140,7 +140,7 @@ def _match_pattern(path: str, pattern: str, is_dir: bool = False) -> bool:
     # Handle directory-only patterns (e.g., "node_modules/")
     # These should match the directory itself AND any files inside
     if pattern.endswith('/'):
-        dir_pattern = pattern.rstrip('/')
+        dir_pattern = pattern[:-1]
         
         # Check if path starts with this directory
         if path == dir_pattern:
@@ -150,15 +150,11 @@ def _match_pattern(path: str, pattern: str, is_dir: bool = False) -> bool:
             # Path is inside this directory - always match
             return True
         
-        # Also check if any path component matches
-        path_parts = path.split('/')
-        if dir_pattern in path_parts:
-            # Path contains this directory as a component
-            idx = path_parts.index(dir_pattern)
-            # If there's more after it, it's inside the dir
-            if idx < len(path_parts) - 1:
-                return True
-            # If it's the last component, only match if it's a dir
+        # Optimization: check if dir_pattern is a component in path without split
+        # It must be surrounded by slashes, or at the end (start is covered above)
+        if f"/{dir_pattern}/" in path:
+            return True
+        if path.endswith(f"/{dir_pattern}"):
             return is_dir
         
         return False
@@ -205,6 +201,18 @@ def _match_pattern(path: str, pattern: str, is_dir: bool = False) -> bool:
     
     # Handle patterns without path separator (match anywhere)
     if '/' not in pattern:
+        # Fast path for exact name matches (no wildcards)
+        if '*' not in pattern and '?' not in pattern and '[' not in pattern:
+            if pattern == path:
+                return True
+            basename = path.rsplit('/', 1)[-1]
+            if pattern == basename:
+                return True
+            # Check components
+            if f"/{pattern}/" in path or path.startswith(f"{pattern}/") or path.endswith(f"/{pattern}"):
+                return True
+            return False
+
         # Match against any component of the path
         if fnmatch.fnmatch(path, pattern):
             return True
@@ -285,6 +293,30 @@ def should_ignore_dir(rel_path: str, patterns: List[str]) -> bool:
         True if directory should be ignored
     """
     return should_ignore(rel_path, patterns, is_dir=True)
+
+
+class IgnoreMatcher:
+    """Helper class to match paths against ignore patterns."""
+    
+    def __init__(self, patterns: List[str]):
+        self.patterns = patterns
+        
+    def match(self, path: str, is_dir: bool = False) -> bool:
+        """Check if path should be ignored."""
+        return should_ignore(path, self.patterns, is_dir)
+
+
+def get_ignore_matcher(root: Path) -> IgnoreMatcher:
+    """Get an IgnoreMatcher for the given root directory.
+    
+    Args:
+        root: Project root directory
+        
+    Returns:
+        IgnoreMatcher configured with default and user patterns
+    """
+    patterns = load_ignore_patterns(root)
+    return IgnoreMatcher(patterns)
 
 
 def filter_paths(
