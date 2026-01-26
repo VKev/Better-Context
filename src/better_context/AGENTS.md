@@ -1,118 +1,47 @@
-# better_context
+# src/better_context
 
-> Auto-generated context for `src/better_context`
+> Core package logic, orchestration, and CLI entry points.
 
 ## 📋 Purpose
 
-src/better_context module
+`better_context` orchestrates the scanning, parsing, and analysis of codebases to generate AI-consumable context. It coordinates language adapters and primitives to build dependency graphs, calculate centrality, and render hierarchical markdown.
 
-## 📂 Contents
+## 🔑 Key Components
 
-- `architecture.py` - 13 exports - 1 dependents
-- `cache.py` - 9 exports - 1 dependents
-- `callgraph.py` - 16 exports - 1 dependents
-- `coupling.py` - 13 exports - 1 dependents
-- `semantic_anchor.py` - 14 exports - 1 dependents
-- `staleness.py` - 10 exports - 1 dependents
-- `AGENTS.md` - module
-- `__init__.py` - barrel export
-- `centrality.py` - 14 exports
-- `chunker.py` - 3 exports
-- `cli.py` - 16 exports
-- `config.py` - 4 exports - configuration
-- `errors.py` - 20 exports
-- `focus.py` - 6 exports
-- `generator.py` - 5 exports
-- `graph.py` - 30 exports
-- `ignore.py` - 5 exports
-- `manifest.py` - 17 exports
-- `optimizer.py` - 11 exports
-- `orchestrator.py` - 5 exports
-- `resolution.py` - 15 exports
-- `scanner.py` - 9 exports
-- `template.py` - 5 exports
-- `tree.py` - 9 exports
-- `visualize.py` - 14 exports
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| **CLI** | [`cli.py`](./cli.py) | Entry point for `better-context` commands. |
+| **Scanner** | [`scanner.py`](./scanner.py) | Discovers files, handles ignores/binary detection. |
+| **Graph** | [`graph.py`](./graph.py) | Builds dependency graphs and analyzes cycles. |
+| **Centrality** | [`centrality.py`](./centrality.py) | Calculates PageRank for file importance. |
+| **Generator** | [`generator.py`](./generator.py) | Renders AGENTS.md files from analysis. |
+| **Orchestrator** | [`orchestrator.py`](./orchestrator.py) | high-level coordination of scan/parse/graph steps. |
+| **Optimizer** | [`optimizer.py`](./optimizer.py) | Selects optimal context within token budgets. |
 
+## 🏗️ Architecture & Layering
 
+The package follows a strict layering model:
 
-## 📁 Subdirectories
+1.  **Orchestration Layer** (`cli.py`, `orchestrator.py`, `generator.py`): Coordinates high-level flows.
+2.  **Analysis Layer** (`graph.py`, `centrality.py`, `optimizer.py`, `scanner.py`): Implements core algorithms.
+3.  **Language Layer** (`languages/`): Handles syntax-specific parsing.
+4.  **Primitives Layer** (`primitives/`): Defines shared data structures.
 
-- [`languages/`](./languages/AGENTS.md) - Language adapters
+**Rule**: Upper layers import from lower layers. `primitives` must not import `languages` or `analysis`.
 
+## 📦 Subpackages
 
+- **[`languages/`](./languages/AGENTS.md)**: Language-specific parsing logic.
+- **[`primitives/`](./primitives/AGENTS.md)**: Core data types and models.
 
-## 🔑 Key Exports
+## 🧪 Testing
 
-- `LayerClassification` (class) - 
-- `LayerViolation` (class) - 
-- `ArchitectureReport` (class) - 
-- `detect_layer_from_path` (function) - 
-- `detect_layer_from_exports` (function) - 
-- `detect_layer_from_imports` (function) - 
-- `classify_file_layer` (function) - 
-- `classify_all_files` (function) - 
-- `get_layer_map` (function) - 
-- `detect_layer_violations` (function) - 
-- `analyze_architecture` (function) - 
-- `format_layer_summary` (function) - 
-- `format_layer_violations` (function) - 
-- `CacheEntry` (class) - 
-- `CacheStats` (class) - 
-- `Cache` (class) - 
-- `IncrementalCache` (class) - 
-- `get_default_cache_dir` (function) - 
-- `create_cache` (function) - 
-- `scan_with_cache` (function) - 
+- Tests are located in `tests/`.
+- Run tests with `pytest`.
+- Use fixtures in `tests/fixtures/` for integration tests.
 
+## 🧭 Navigation
 
-## 📥 Dependencies
-
-### Internal
-- `better_context.config` - Config, load_config, validate_config
-- `better_context.manifest` - (
-- `better_context.errors` - (
-- `better_context.coupling` - (
-- `better_context.architecture` - (
-- `better_context.callgraph` - (
-- `better_context.optimizer` - (
-- `better_context.focus` - (
-- `better_context.semantic_anchor` - (
-- `.graph` - DependencyGraph
-- `.manifest` - FileEntry
-- `.manifest` - FileEntry
-- `re` - *
-- `.manifest` - FileEntry, Manifest, ChunkEntry
-- `.graph` - DependencyGraph
-- `re` - *
-- `.languages.base` - (
-- `.semantic_anchor` - compute_semantic_anchor
-- `.config` - load_config
-- `.manifest` - load_manifest, Manifest
-
-
-### External
-- `__future__` - annotations
-- `dataclasses` - dataclass, field
-- `typing` - TYPE_CHECKING, List, Dict, Optional, Set
-- `__future__` - annotations
-- `hashlib` - *
-- `json` - *
-- `time` - *
-- `dataclasses` - dataclass, field, asdict
-- `pathlib` - Path
-- `typing` - Dict, Optional, Any, List, Tuple, TYPE_CHECKING
-- `fnmatch` - *
-- `__future__` - annotations
-- `collections` - defaultdict
-- `dataclasses` - dataclass, field
-- `pathlib` - Path
-- `typing` - TYPE_CHECKING, List, Dict, Optional, Tuple, Set
-- `__future__` - annotations
-- `dataclasses` - dataclass
-- `typing` - TYPE_CHECKING
-- `collections` - deque
-
-
----
-*[← Back to parent](../AGENTS.md)*
+- **Parent**: [`../AGENTS.md`](../AGENTS.md)
+- **Languages**: [`./languages/AGENTS.md`](./languages/AGENTS.md)
+- **Primitives**: [`./primitives/AGENTS.md`](./primitives/AGENTS.md)

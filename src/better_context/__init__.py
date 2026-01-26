@@ -101,6 +101,24 @@ from better_context.semantic_anchor import (
     anchor_mapping_to_dict,
     dict_to_anchor_mapping,
 )
+from better_context.primitives import (
+    DepsResult,
+    EntriesResult,
+    FileInfoResult,
+    OverviewResult,
+    ProjectDetection,
+    ProjectTooling,
+    ScriptsResult,
+    TreeResult,
+    detect_project_tooling,
+    detect_tooling,
+    get_deps,
+    get_entries,
+    get_file_info,
+    get_overview,
+    get_scripts,
+    get_tree,
+)
 
 __all__ = [
     "__version__",
@@ -188,4 +206,21 @@ __all__ = [
     "update_anchor_mapping",
     "anchor_mapping_to_dict",
     "dict_to_anchor_mapping",
+    # Primitives
+    "DepsResult",
+    "EntriesResult",
+    "FileInfoResult",
+    "OverviewResult",
+    "ProjectDetection",
+    "ProjectTooling",
+    "ScriptsResult",
+    "TreeResult",
+    "detect_project_tooling",
+    "detect_tooling",
+    "get_deps",
+    "get_entries",
+    "get_file_info",
+    "get_overview",
+    "get_scripts",
+    "get_tree",
 ]

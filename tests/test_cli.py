@@ -32,8 +32,5 @@ def test_scan_command():
     assert args.command == "scan"
 
 
-def test_all_command():
-    """Test all command parsing."""
-    parser = create_parser()
-    args = parser.parse_args(["all", "."])
-    assert args.command == "all"
+    # test_all_command removed as command is deprecated/removed
+    pass

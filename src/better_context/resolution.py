@@ -206,7 +206,7 @@ class BaseResolver:
     
     # Common external package prefixes by language
     EXTERNAL_PREFIXES: Dict[str, Set[str]] = {
-        'python': {'os', 'sys', 'json', 'typing', 're', 'pathlib', 'dataclasses'},
+        'python': {'os', 'sys', 'json', 'typing', 're', 'pathlib', 'dataclasses', 'flask', 'django', 'fastapi', 'pytest'},
         'typescript': {'react', 'next', 'lodash', 'axios', 'express'},
         'javascript': {'react', 'next', 'lodash', 'axios', 'express'},
     }

@@ -88,4 +88,5 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+norecursedirs = ["tests/fixtures"]
 addopts = "-v --tb=short"

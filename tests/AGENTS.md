@@ -28,7 +28,6 @@ Test files
 - `test_scanner.py` - 3 exports - tests
 - `test_semantic_anchor.py` - 52 exports - tests
 - `test_staleness.py` - 37 exports - tests
-- `test_template.py` - 38 exports - tests
 - `test_tree.py` - 7 exports - tests
 - `test_visualize_architecture.py` - 26 exports - tests
 

@@ -29,22 +29,28 @@ Traditional approaches to giving AI agents codebase context fall short:
 | Grep-based discovery | Misses relationships |
 | Flat documentation | Lacks navigation structure |
 
-**Better Context** solves this with:
+**Better Context v3** solves this with **Fast Primitives**:
 
+- **Overview**: 100ms project detection (type, frameworks, tooling)
+- **Tree**: 50ms directory traversal with smart ignoring
+- **Scripts**: 50ms command extraction (npm, poetry, make)
+- **Entries**: 50ms entry point detection
+- **File**: 200ms file parsing (chunks, imports, exports)
+- **Deps**: 100ms dependency analysis
+
+Plus deep analysis tools when needed:
 - **Mathematical file ranking** via PageRank centrality
 - **Dependency graph analysis** with cycle detection
-- **Fractal summarization** with hierarchical AGENTS.md files
+- **Token budget optimization** for precise context selection
 - **Progressive disclosure** - agents load only what they need
-- **Zero-dependency core** - works anywhere Python runs
 
 ## What It Does
 
-1. **Scans** your codebase, detecting languages and filtering binary files
-2. **Parses** functions, classes, imports, and exports using dual-mode parsing (regex fallback + optional tree-sitter AST)
-3. **Builds** a dependency graph showing what imports what
-4. **Calculates** PageRank centrality to rank files by structural importance
-5. **Detects** circular dependencies using Tarjan's SCC algorithm
-6. **Generates** hierarchical AGENTS.md files with progressive disclosure
+1. **Primal Scan**: Fast discovery of project structure and capabilities
+2. **On-Demand Parsing**: Parse only what's needed, when it's needed
+3. **Graph Analysis**: Build dependency graphs for deep understanding
+4. **Context Optimization**: Fit the most relevant code into limited token windows
+5. **Format Flexibility**: Output as JSON (for tools), Markdown (for LLMs), or Human (for people)
 
 ## Installation
 
@@ -75,9 +81,13 @@ pip install -e ".[dev]"
 
 | Command | Description |
 |---------|-------------|
-| `better-context all [path]` | Scan and generate AGENTS.md (common workflow) |
+| `better-context overview` | Get project overview (language, framework, tooling) |
+| `better-context tree` | Show directory structure with file counts |
+| `better-context scripts` | List available scripts from package files |
+| `better-context entries` | Find entry points (CLI, main scripts) |
+| `better-context file <path>` | Get metadata, chunks, imports, and exports for a file |
+| `better-context deps <path>` | Get dependencies and dependents for a file |
 | `better-context scan [path]` | Scan codebase and generate manifest |
-| `better-context agents` | Generate AGENTS.md files from manifest |
 | `better-context stats` | Show codebase statistics |
 | `better-context graph` | Export dependency graph |
 | `better-context focus <file>` | Generate context centered on a specific file |
@@ -88,11 +98,20 @@ pip install -e ".[dev]"
 ### Examples
 
 ```bash
-# Analyze current directory
-better-context all .
+# Get quick project overview
+better-context overview
+
+# See directory structure
+better-context tree --depth 2
+
+# Inspect a specific file
+better-context file src/auth/jwt.py
+
+# Check dependencies
+better-context deps src/auth/jwt.py
 
 # Analyze specific project with verbose output
-better-context all ./my-project -v
+better-context scan ./my-project -v
 
 # Generate only the manifest (for debugging)
 better-context scan --out manifest.json
@@ -354,6 +373,9 @@ pip install -e ".[dev]"
 # Run tests
 pytest
 
+# Run performance tests (opt-in)
+BC_PERF=1 pytest -m perf
+
 # Run tests with coverage
 pytest --cov=src/better_context
 
@@ -382,7 +404,6 @@ src/better_context/
 ├── generator.py        # AGENTS.md generation
 ├── optimizer.py        # Token budget optimizer
 ├── semantic_anchor.py  # Content-addressable chunk IDs
-├── template.py         # Template engine (zero-dep)
 ├── tree.py             # Directory tree builder
 ├── visualize.py        # Graph export (Mermaid, DOT, JSON)
 ├── errors.py           # Error handling

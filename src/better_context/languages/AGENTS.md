@@ -1,80 +1,41 @@
-# languages
+# src/better_context/languages
 
-> Auto-generated context for `src/better_context/languages`
+> Language-specific adapters, parsers, and syntax handling.
 
 ## 📋 Purpose
 
-src/better_context/languages module
+This directory contains adapters that implement the parsing logic for different programming languages. Each adapter is responsible for extracting imports, exports, and code chunks from source files of a specific language.
 
-## 📂 Contents
+## 🔑 Key Components
 
-- `AGENTS.md` - module
-- `__init__.py` - 8 exports - barrel export
-- `base.py` - 8 exports
-- `go.py` - 1 exports
-- `python.py` - 1 exports
-- `typescript.py` - 2 exports - type definitions
+| File | Responsibility |
+|------|----------------|
+| **Base Adapter** | [`base.py`](./base.py) | Abstract base class defining the `LanguageAdapter` interface. |
+| **Python** | [`python.py`](./python.py) | Python parser (imports, classes, functions). |
+| **TypeScript** | [`typescript.py`](./typescript.py) | TS/JS parser (imports, exports, types). |
+| **Go** | [`go.py`](./go.py) | Go parser (WIP). |
 
+## 🧩 Architecture
 
+- **Interface**: All adapters must inherit from `LanguageAdapter` in `base.py`.
+- **Registration**: Adapters are typically registered or mapped by file extension in the parent `orchestrator` or factory.
+- **Dependencies**: Adapters depend on `primitives` for data structures but should **not** depend on other language adapters.
+- **Parsing**: Adapters may use regex (fast/simple) or `tree-sitter` (robust/AST) strategies.
 
+## ➕ Adding a New Language
 
-## 🔑 Key Exports
+1.  Create a new file (e.g., `rust.py`).
+2.  Inherit from `LanguageAdapter`.
+3.  Implement `parse_imports`, `parse_exports`, and `chunkify`.
+4.  Map the new adapter to file extensions in the main configuration/factory.
+5.  Add tests with sample code in `tests/fixtures/`.
 
-- `detect_language` (function) - 
-- `detect_from_shebang` (function) - 
-- `is_supported_language` (function) - 
-- `get_extensions_for_language` (function) - 
-- `get_all_supported_extensions` (function) - 
-- `register_adapter` (function) - 
-- `get_adapter` (function) - 
-- `get_adapter_for_file` (function) - 
-- `ChunkResult` (class) - 
-- `ImportResult` (class) - 
-- `ExportResult` (class) - 
-- `ParseResult` (class) - 
-- `LanguageAdapter` (class) - 
-- `generate_chunk_id` (function) - 
-- `extract_first_line` (function) - 
-- `extract_docstring_after_line` (function) - 
-- `GoAdapter` (class) - 
-- `PythonAdapter` (class) - 
-- `TypeScriptAdapter` (class) - 
-- `JavaScriptAdapter` (class) - 
+## ⚠️ Pitfalls
 
+- **Performance**: Parsing runs on every file; keep it efficient. Avoid heavy imports at module level if possible.
+- **Regex limitations**: Regex is fragile for complex syntax; prefer AST-based parsing for robustness when feasible.
 
-## 📥 Dependencies
+## 🧭 Navigation
 
-### Internal
-- `.base` - (
-- `re` - *
-- `.base` - (
-- `re` - *
-- `.base` - (
-- `re` - *
-- `.base` - (
-
-
-### External
-- `__future__` - annotations
-- `pathlib` - Path
-- `typing` - Dict, List, Optional, TYPE_CHECKING, Any
-- `__future__` - annotations
-- `dataclasses` - dataclass, field
-- `typing` - Dict, List, Optional, Any, TYPE_CHECKING
-- `typing` - Protocol
-- `typing` - Protocol
-- `typing_extensions` - Protocol
-- `__future__` - annotations
-- `typing` - Dict, List, Optional, Any
-- `__future__` - annotations
-- `typing` - List, Optional, Tuple, Dict, Any
-- `` - compute_semantic_anchor
-- `__future__` - annotations
-- `dataclasses` - dataclass
-- `typing` - Dict, List, Optional, Pattern
-- `tree_sitter_typescript` - *
-- `tree_sitter_javascript` - *
-
-
----
-*[← Back to parent](../AGENTS.md)*
+- **Parent**: [`../AGENTS.md`](../AGENTS.md)
+- **Primitives**: [`../primitives/AGENTS.md`](../primitives/AGENTS.md)
