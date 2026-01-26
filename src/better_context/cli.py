@@ -14,6 +14,35 @@ from .config import load_config
 from .manifest import load_manifest, Manifest
 from .orchestrator import Orchestrator, generate_context
 from .staleness import check_staleness, format_staleness_report, load_staleness_info
+from .primitives.overview import analyze_overview
+from .primitives.tree import analyze_tree
+from .primitives.scripts import analyze_scripts
+from .primitives.entries import analyze_entry_points
+from .primitives.file_info import analyze_file
+from .primitives.deps import get_file_dependencies
+from .primitives.formatters import (
+    format_json,
+    format_tree_human,
+    format_tree_markdown,
+    format_overview_human,
+    format_overview_markdown,
+    format_scripts_human,
+    format_scripts_markdown,
+    format_entries_human,
+    format_entries_markdown,
+    format_file_info_human,
+    format_file_info_markdown,
+    format_deps_human,
+    format_deps_markdown,
+)
+from .graph import build_dependency_graph, build_graph_from_edges
+from .scanner import walk_repository, FileInventory
+
+
+def add_common_primitive_args(parser: argparse.ArgumentParser) -> None:
+    """Add common arguments for primitive commands."""
+    # NOOP for now, args added manually
+    pass
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -24,7 +53,6 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  better-context all ./my-project          Scan and generate AGENTS.md
   better-context scan --out manifest.json  Generate only the manifest
   better-context stats                     Show codebase statistics
   better-context graph -f mermaid          Export dependency graph
@@ -67,6 +95,12 @@ Examples:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # --- primitives command ---
+    primitives_parser = subparsers.add_parser("primitives", help="Manage and inspect primitives")
+    primitives_parser.add_argument("primitive_command", choices=["list", "show"], help="Command to run")
+    primitives_parser.add_argument("--type", choices=["project", "file", "entry", "script"], help="Filter by primitive type")
+    primitives_parser.add_argument("--id", help="Primitive ID for show command")
+
     # --- scan command ---
     scan_parser = subparsers.add_parser("scan", help="Scan codebase and generate manifest")
     scan_parser.add_argument(
@@ -84,31 +118,33 @@ Examples:
         help="Manifest output path (default: .better-context/manifest.json)",
     )
 
-    # --- agents command ---
-    agents_parser = subparsers.add_parser("agents", help="Generate AGENTS.md files from manifest")
-    agents_parser.add_argument(
-        "--manifest",
-        "-m",
-        type=Path,
-        default=None,
-        help="Path to manifest file",
-    )
-    agents_parser.add_argument(
-        "--depth",
-        type=int,
-        default=-1,
-        help="Max depth for AGENTS.md generation (-1 = unlimited)",
-    )
+    # --- overview command ---
+    overview_parser = subparsers.add_parser("overview", help="Get project overview")
+    overview_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
+    overview_parser.add_argument("--timing", action="store_true", help="Show execution time")
 
-    # --- all command ---
-    all_parser = subparsers.add_parser("all", help="Scan and generate AGENTS.md (common workflow)")
-    all_parser.add_argument(
-        "path",
-        nargs="?",
-        type=Path,
-        default=Path("."),
-        help="Path to analyze",
-    )
+    # --- tree command ---
+    tree_parser = subparsers.add_parser("tree", help="Show directory structure")
+    tree_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
+    tree_parser.add_argument("--depth", type=int, default=2, help="Max depth (default: 2)")
+
+    # --- scripts command ---
+    scripts_parser = subparsers.add_parser("scripts", help="List available scripts")
+    scripts_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
+
+    # --- entries command ---
+    entries_parser = subparsers.add_parser("entries", help="Find entry points")
+    entries_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
+
+    # --- file command ---
+    file_parser = subparsers.add_parser("file", help="Get file metadata")
+    file_parser.add_argument("path", help="Path to file")
+    file_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
+
+    # --- deps command ---
+    deps_parser = subparsers.add_parser("deps", help="Get file dependencies")
+    deps_parser.add_argument("path", help="Path to file")
+    deps_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
 
     # --- stats command ---
     stats_parser = subparsers.add_parser("stats", help="Show codebase statistics")
@@ -276,14 +312,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Dispatch to command handlers
     command_handlers = {
         "scan": cmd_scan,
-        "agents": cmd_agents,
-        "all": cmd_all,
+        # "agents": cmd_agents, # Deprecated
+        # "all": cmd_all,       # Deprecated
         "stats": cmd_stats,
         "graph": cmd_graph,
         "clean": cmd_clean,
         "focus": cmd_focus,
         "verify": cmd_verify,
         "optimize": cmd_optimize,
+        # "primitives": cmd_primitives,
+        "overview": cmd_overview,
+        "tree": cmd_tree,
+        "scripts": cmd_scripts,
+        "entries": cmd_entries,
+        "file": cmd_file,
+        "deps": cmd_deps,
     }
 
     handler = command_handlers.get(args.command)
@@ -349,68 +392,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_agents(args: argparse.Namespace) -> int:
-    """Generate AGENTS.md files from manifest."""
-    root = args.root.resolve()
-    
-    # Load manifest
-    manifest = load_manifest_or_fail(args)
-    if manifest is None:
-        return 1
-    
-    print("[agents] Generating AGENTS.md files...")
-    
-    try:
-        orchestrator = Orchestrator(root)
-        
-        # Rebuild graph from manifest
-        from .graph import build_graph_from_edges
-        graph = build_graph_from_edges(
-            manifest.graph.edges,
-            manifest.graph.nodes,
-        )
-        
-        result = orchestrator.generate(
-            manifest,
-            graph,
-            max_depth=args.depth,
-        )
-        
-        print(f"[agents] Generated {len(result.files_written)} AGENTS.md files")
-        print(f"[agents] Total lines: {result.total_lines}")
-        return 0
-        
-    except Exception as e:
-        print(f"[error] Generation failed: {e}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        return 1
-
-
-def cmd_all(args: argparse.Namespace) -> int:
-    """Scan and generate AGENTS.md (common workflow)."""
-    root = (args.path or args.root).resolve()
-    print(f"[all] Analyzing {root}...")
-    
-    try:
-        result = generate_context(root)
-        
-        print(f"[all] Analyzed {result.analysis.file_count} files")
-        print(f"[all] Generated {len(result.generation.files_written)} AGENTS.md files")
-        print(f"[all] Completed in {result.total_time_ms}ms")
-        
-        if result.analysis.has_cycles:
-            print(f"[warning] Found {len(result.analysis.cycles)} circular dependencies")
-        
-        return 0
-        
-    except Exception as e:
-        print(f"[error] Analysis failed: {e}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        return 1
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -807,6 +788,123 @@ def cmd_verify(args: argparse.Namespace) -> int:
             traceback.print_exc()
         return 1
 
+
+def cmd_overview(args: argparse.Namespace) -> int:
+    """Get project overview."""
+    root = args.root.resolve()
+    
+    if args.timing:
+        from .primitives.base import timed
+        result, elapsed = timed(analyze_overview)(root)
+        print(f"Time: {elapsed:.2f}ms", file=sys.stderr)
+    else:
+        result = analyze_overview(root)
+    
+    if args.format == "human":
+        print(format_overview_human(result))
+    elif args.format == "markdown":
+        print(format_overview_markdown(result))
+    else:
+        print(format_json(result))
+    return 0
+
+
+def cmd_tree(args: argparse.Namespace) -> int:
+    """Show directory structure."""
+    root = args.root.resolve()
+    result = analyze_tree(root, max_depth=args.depth)
+        
+    if args.format == "human":
+        print(format_tree_human(result))
+    elif args.format == "markdown":
+        print(format_tree_markdown(result))
+    else:
+        print(format_json(result))
+    return 0
+
+
+def cmd_scripts(args: argparse.Namespace) -> int:
+    """List available scripts."""
+    root = args.root.resolve()
+    result = analyze_scripts(root)
+        
+    if args.format == "human":
+        print(format_scripts_human(result))
+    elif args.format == "markdown":
+        print(format_scripts_markdown(result))
+    else:
+        print(format_json(result))
+    return 0
+
+
+def cmd_entries(args: argparse.Namespace) -> int:
+    """Find entry points."""
+    root = args.root.resolve()
+    result = analyze_entry_points(root)
+        
+    if args.format == "human":
+        print(format_entries_human(result))
+    elif args.format == "markdown":
+        print(format_entries_markdown(result))
+    else:
+        print(format_json(result))
+    return 0
+
+
+def cmd_file(args: argparse.Namespace) -> int:
+    """Get file metadata."""
+    root = args.root.resolve()
+    
+    # Handle path resolution manually to ensure correct relative path logic
+    path_arg = Path(args.path)
+    if not path_arg.is_absolute():
+        path = root / path_arg
+    else:
+        path = path_arg
+        
+    try:
+        result = analyze_file(path, root)
+    except Exception as e:
+        print(f"Error analyzing file: {e}", file=sys.stderr)
+        return 1
+        
+    if args.format == "human":
+        print(format_file_info_human(result))
+    elif args.format == "markdown":
+        print(format_file_info_markdown(result))
+    else:
+        print(format_json(result))
+    return 0
+
+
+def cmd_deps(args: argparse.Namespace) -> int:
+    """Get file dependencies."""
+    root = args.root.resolve()
+    
+    # Check if manifest exists
+    manifest = load_manifest_or_fail(args)
+    
+    if manifest:
+        # Rebuild graph from manifest
+        graph = build_graph_from_edges(
+            manifest.graph.edges,
+            manifest.graph.nodes,
+        )
+    else:
+        # Fallback logic not implemented fully, just error for now as per test expectation?
+        # Test expects "No dependency graph available"
+        print("Error: No dependency graph available. Run 'better-context scan' first.", file=sys.stderr)
+        return 1
+        
+    result = get_file_dependencies(args.path, graph)
+        
+    if args.format == "human":
+        print(format_deps_human(result))
+    elif args.format == "markdown":
+        print(format_deps_markdown(result))
+    else:
+        print(format_json(result))
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

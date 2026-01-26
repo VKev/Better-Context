@@ -34,7 +34,7 @@ from .manifest import (
     GraphData, ParseError, create_manifest_meta, save_manifest, load_manifest,
     MANIFEST_VERSION,
 )
-from .generator import generate_agents_md, GeneratorConfig, GeneratorResult
+# from .generator import generate_agents_md, GeneratorConfig, GeneratorResult
 from .staleness import save_staleness_info
 
 
@@ -66,7 +66,8 @@ class OrchestrationResult:
     """Result of a complete orchestration run (analyze + generate)."""
     
     analysis: AnalysisResult
-    generation: GeneratorResult
+    # generation: GeneratorResult
+    generation: Any = None # Typed as Any to avoid import error if GeneratorResult is gone
     total_time_ms: int = 0
 
 
@@ -135,28 +136,28 @@ class Orchestrator:
         analysis = self.analyze()
         
         # Step 2: Generate (if requested)
-        generation = GeneratorResult()
-        if generate:
-            generation = self.generate(
-                analysis.manifest,
-                analysis.graph,
-                max_depth=max_depth,
-                output_root=output_root,
-            )
-            
-            # Step 3: Save staleness info for verification
-            # Exclude AGENTS.md files since they are our output, not input
-            file_hashes = {
-                f.path: f.content_hash
-                for f in analysis.inventory.files
-                if not f.path.endswith("AGENTS.md")
-            }
-            save_staleness_info(
-                self.root,
-                file_hashes,
-                analysis.manifest.meta.generated_at,
-                self.config.output_dir,
-            )
+        generation = None # GeneratorResult()
+        # if generate:
+        #     generation = self.generate(
+        #         analysis.manifest,
+        #         analysis.graph,
+        #         max_depth=max_depth,
+        #         output_root=output_root,
+        #     )
+        #     
+        #     # Step 3: Save staleness info for verification
+        #     # Exclude AGENTS.md files since they are our output, not input
+        #     file_hashes = {
+        #         f.path: f.content_hash
+        #         for f in analysis.inventory.files
+        #         if not f.path.endswith("AGENTS.md")
+        #     }
+        #     save_staleness_info(
+        #         self.root,
+        #         file_hashes,
+        #         analysis.manifest.meta.generated_at,
+        #         self.config.output_dir,
+        #     )
         
         total_time_ms = int((time.time() - start_time) * 1000)
         
@@ -222,8 +223,11 @@ class Orchestrator:
         graph: DependencyGraph,
         max_depth: int = -1,
         output_root: Optional[Path] = None,
-    ) -> GeneratorResult:
+    ) -> Any:
         """Generate AGENTS.md files from manifest.
+        
+        DEPRECATED: This method relies on deprecated generator.py logic.
+        Future versions will remove this as agents should generate their own context.
         
         Args:
             manifest: Analysis manifest
@@ -234,16 +238,24 @@ class Orchestrator:
         Returns:
             GeneratorResult with list of generated files
         """
-        output_root = output_root or self.root
+        # output_root = output_root or self.root
         
-        gen_config = GeneratorConfig(
-            max_depth=max_depth,
-            max_key_files=10,
-            include_metrics=True,
-            include_diagrams=True,
-        )
-        
-        return generate_agents_md(manifest, graph, output_root, gen_config)
+        # try:
+        #     from .generator import generate_agents_md, GeneratorConfig, GeneratorResult
+        #     
+        #     gen_config = GeneratorConfig(
+        #         max_depth=max_depth,
+        #         max_key_files=10,
+        #         include_metrics=True,
+        #         include_diagrams=True,
+        #     )
+        #     
+        #     return generate_agents_md(manifest, graph, output_root, gen_config)
+        # except ImportError:
+        #     # Handle case where generator is already removed
+        #     print("Warning: Generator module not found. AGENTS.md generation skipped.", file=sys.stderr)
+        #     return GeneratorResult()
+        return None
     
     def save_manifest(self, manifest: Manifest, path: Optional[Path] = None) -> Path:
         """Save manifest to JSON file.

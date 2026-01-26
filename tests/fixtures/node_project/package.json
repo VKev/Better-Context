@@ -1,0 +1,16 @@
+{
+  "name": "node-project",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  }
+}
