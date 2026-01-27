@@ -49,13 +49,20 @@ def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
         prog="better-context",
-        description="AI Agent Codebase Intelligence CLI - Generate AGENTS.md hierarchies",
+        description="AI Agent Codebase Intelligence CLI. Transforms unstructured codebases into structured context. Use these tools to explore, index, and understand codebases to generate AGENTS.md documentation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
   better-context scan --out manifest.json  Generate only the manifest
   better-context stats                     Show codebase statistics
   better-context graph -f mermaid          Export dependency graph
+
+Agent Workflow:
+  1. better-context scan       # Index the codebase
+  2. better-context overview   # Get project metadata
+  3. better-context tree       # Visualize file hierarchy
+  4. better-context stats      # Find important files
+  5. better-context focus      # Deep dive into specific files
 """,
     )
 
@@ -102,7 +109,7 @@ Examples:
     primitives_parser.add_argument("--id", help="Primitive ID for show command")
 
     # --- scan command ---
-    scan_parser = subparsers.add_parser("scan", help="Scan codebase and generate manifest")
+    scan_parser = subparsers.add_parser("scan", help="Index the codebase to enable deep analysis. Run this first!")
     scan_parser.add_argument(
         "path",
         nargs="?",
@@ -119,35 +126,35 @@ Examples:
     )
 
     # --- overview command ---
-    overview_parser = subparsers.add_parser("overview", help="Get project overview")
+    overview_parser = subparsers.add_parser("overview", help="Extract project metadata (language, frameworks, etc.)")
     overview_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
     overview_parser.add_argument("--timing", action="store_true", help="Show execution time")
 
     # --- tree command ---
-    tree_parser = subparsers.add_parser("tree", help="Show directory structure")
+    tree_parser = subparsers.add_parser("tree", help="Visualize file hierarchy. Use --depth to limit noise.")
     tree_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
     tree_parser.add_argument("--depth", type=int, default=2, help="Max depth (default: 2)")
 
     # --- scripts command ---
-    scripts_parser = subparsers.add_parser("scripts", help="List available scripts")
+    scripts_parser = subparsers.add_parser("scripts", help="Extract runnable scripts from package files")
     scripts_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
 
     # --- entries command ---
-    entries_parser = subparsers.add_parser("entries", help="Find entry points")
+    entries_parser = subparsers.add_parser("entries", help="Identify application entry points (CLI, main, server)")
     entries_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
 
     # --- file command ---
-    file_parser = subparsers.add_parser("file", help="Get file metadata")
+    file_parser = subparsers.add_parser("file", help="Get metadata and structure for a specific file")
     file_parser.add_argument("path", help="Path to file")
     file_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
 
     # --- deps command ---
-    deps_parser = subparsers.add_parser("deps", help="Get file dependencies")
+    deps_parser = subparsers.add_parser("deps", help="Get direct dependencies and dependents for a file")
     deps_parser.add_argument("path", help="Path to file")
     deps_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
 
     # --- stats command ---
-    stats_parser = subparsers.add_parser("stats", help="Show codebase statistics")
+    stats_parser = subparsers.add_parser("stats", help="Calculate metrics and find important files (PageRank)")
     stats_parser.add_argument(
         "--json",
         action="store_true",
@@ -155,7 +162,7 @@ Examples:
     )
 
     # --- graph command ---
-    graph_parser = subparsers.add_parser("graph", help="Export dependency graph")
+    graph_parser = subparsers.add_parser("graph", help="Export dependency graph in standard formats")
     graph_parser.add_argument(
         "-f",
         "--format",
@@ -172,7 +179,7 @@ Examples:
     )
 
     # --- clean command ---
-    clean_parser = subparsers.add_parser("clean", help="Remove generated files")
+    clean_parser = subparsers.add_parser("clean", help="Remove generated files and caches")
     clean_parser.add_argument(
         "--cache-only",
         action="store_true",
@@ -182,7 +189,7 @@ Examples:
     # --- focus command ---
     focus_parser = subparsers.add_parser(
         "focus",
-        help="Generate context centered on a specific file (ego-centric view)",
+        help="Generate deep context for a specific file (dependencies, tests)",
     )
     focus_parser.add_argument(
         "file",
@@ -228,7 +235,7 @@ Examples:
     # --- verify command ---
     verify_parser = subparsers.add_parser(
         "verify",
-        help="Check if generated context is stale and needs regeneration",
+        help="Verify if the cached manifest matches files on disk",
     )
     verify_parser.add_argument(
         "-v",
@@ -247,7 +254,7 @@ Examples:
     # --- optimize command ---
     optimize_parser = subparsers.add_parser(
         "optimize",
-        help="Select optimal context within token budget",
+        help="Select relevant code chunks within a token limit",
     )
     optimize_parser.add_argument(
         "--budget",

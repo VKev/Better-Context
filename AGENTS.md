@@ -157,3 +157,36 @@ bv --robot-label-health | jq '.results.labels[] | select(.health_level == "criti
 **Performance:** Phase 1 instant, Phase 2 async (500ms timeout). Prefer `--robot-plan` over `--robot-insights` when speed matters. Results cached by data hash.
 
 Use bv instead of parsing beads.jsonl—it computes PageRank, critical paths, cycles, and parallel tracks deterministically.
+
+## Using better-context (Codebase Intelligence)
+
+**better-context** is a CLI tool that structures the codebase into AI-consumable context. Use it to generate accurate, data-driven content for `AGENTS.md` files.
+
+**Crucial:** Before running advanced analysis commands (`stats`, `focus`, `optimize`), you MUST run `better-context scan` to index the codebase and generate the manifest.
+
+### Commands for AGENTS.md Generation
+
+| Information Needed | Command | Why it helps |
+|-------------------|---------|--------------|
+| **Project Overview** | `better-context overview --format json` | Identifies primary language, frameworks, and build tools accurately. |
+| **Directory Structure** | `better-context tree --depth 2` | Generates a clean visualization of the file hierarchy for the docs. |
+| **Entry Points** | `better-context entries` | Finds CLI entry points and main scripts automatically. |
+| **Available Scripts** | `better-context scripts` | Lists run/test/build commands defined in package files. |
+| **Key Files** | `better-context stats` | Lists top files by PageRank centrality (mathematical importance). |
+
+### Deep Dive Commands (for coding tasks)
+
+When you need to understand a specific file or feature:
+
+1. **Focus Mode (Ego-centric Context)**
+   ```bash
+   better-context focus src/path/to/file.py
+   ```
+   Use this to find **what to read**. It lists dependencies, dependents, related tests, and shared types sorted by relevance.
+
+2. **Token Budget Optimization**
+   ```bash
+   better-context optimize --budget 8000 --task "fix bug in auth"
+   ```
+   Selects the most relevant code chunks that fit in your context window.
+
