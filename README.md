@@ -10,13 +10,13 @@
 ## Quick Start
 
 ```bash
-# Install
-pip install better-context
+# Run directly with uv (no install required)
+uvx better-context overview
+uvx better-context tree --depth 2
 
-# Fast project overview (no indexing required)
+# Or install from PyPI
+pip install better-context
 better-context overview
-better-context tree --depth 2
-better-context scripts
 
 # Deep analysis (requires indexing first)
 better-context scan
@@ -70,10 +70,33 @@ Traditional approaches to giving AI agents codebase context fall short:
 
 ## Installation
 
+### Run Directly with uv (Recommended)
+
+No installation required! Just use `uvx` to run directly:
+
+```bash
+# Run any command directly
+uvx better-context overview
+uvx better-context tree --depth 2
+uvx better-context scan
+
+# Run from git before PyPI release
+uvx --from "git+https://github.com/better-context/better-context.git" better-context overview
+
+# With optional dependencies (tree-sitter for enhanced parsing)
+uvx --from "better-context[full]" better-context overview
+```
+
 ### From PyPI
 
 ```bash
 pip install better-context
+```
+
+### With uv
+
+```bash
+uv add better-context
 ```
 
 ### With Optional Dependencies

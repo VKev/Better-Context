@@ -7,10 +7,18 @@ import json
 import shutil
 import sys
 from collections import Counter
+from importlib.metadata import version as get_version
 from pathlib import Path
 from typing import List, Optional
 
 from .config import load_config
+
+def _get_version() -> str:
+    """Get package version from metadata."""
+    try:
+        return get_version("better-context")
+    except Exception:
+        return "1.0.0"  # Fallback for editable installs
 from .manifest import load_manifest, Manifest
 from .orchestrator import Orchestrator, generate_context
 from .staleness import check_staleness, format_staleness_report, load_staleness_info
@@ -69,7 +77,7 @@ Agent Workflow:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.0.0",
+        version=f"%(prog)s {_get_version()}",
     )
 
     parser.add_argument(
