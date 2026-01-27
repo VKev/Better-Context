@@ -1,31 +1,44 @@
 # src/better_context/primitives
 
-> Core data structures, types, and fundamental building blocks.
+> Fast data primitives and output formatters for AI agent queries.
 
 ## 📋 Purpose
 
-This directory defines the shared vocabulary and data models used throughout the system. These primitives are the "currency" exchanged between the scanner, parsers, graph analyzer, and generator. They are designed to be stable, serializable, and dependency-light.
+This directory provides sub-200ms data primitives that AI agents can query on-demand without requiring a full codebase scan. It also contains the shared data models used throughout the system.
 
-## 🔑 Key Types
+## 🔑 Fast Primitives
 
-| File | Key Classes/Types | Description |
-|------|-------------------|-------------|
-| **File Info** | [`file_info.py`](./file_info.py) | `FileInfo`: Metadata about a source file (path, size, hash). |
-| **Entries** | [`entries.py`](./entries.py) | `Entry`: Represents a code element (function, class). |
-| **Deps** | [`deps.py`](./deps.py) | `Dependency`: Represents an import relationship. |
-| **Tree** | [`tree.py`](./tree.py) | Directory tree structures. |
-| **Project** | [`project.py`](./project.py) | `Project`: Top-level container for analysis results. |
+| Primitive | File | Description |
+|-----------|------|-------------|
+| **Overview** | [`overview.py`](./overview.py) | Project metadata (language, framework, package manager) |
+| **Tree** | [`tree.py`](./tree.py) | Directory structure with file counts |
+| **Scripts** | [`scripts.py`](./scripts.py) | Runnable scripts from package files |
+| **Entries** | [`entries.py`](./entries.py) | Entry point detection (CLI, main, server) |
+| **File Info** | [`file_info.py`](./file_info.py) | Single file metadata, chunks, imports, exports |
+| **Deps** | [`deps.py`](./deps.py) | Dependencies and dependents for a file |
+| **Formatters** | [`formatters.py`](./formatters.py) | Output formatters (JSON, human, markdown) |
+
+## 🔧 Data Types
+
+| File | Key Classes | Description |
+|------|-------------|-------------|
+| **Project** | [`project.py`](./project.py) | `ProjectDetection`, `ProjectTooling` |
+| **Entry** | [`entry.py`](./entry.py) | `EntryPoint` data model |
+| **Script** | [`script.py`](./script.py) | `Script` data model |
+| **File** | [`file.py`](./file.py) | `FileInfo` data model |
+| **Base** | [`base.py`](./base.py) | Shared utilities and timing helpers |
 
 ## 📏 Invariants & Rules
 
 - **No Upward Dependencies**: Primitives must **never** import from `languages` or `better_context` core. They are the leaf nodes of the dependency graph.
-- **Immutability**: Prefer immutable data classes (`@dataclass(frozen=True)`) for core models to prevent accidental side effects during analysis.
-- **Serialization**: Models should be easily serializable to JSON (for caching and output).
+- **Fast by Design**: Primitives target sub-200ms execution. Avoid heavy computation or full codebase traversal.
+- **Output Flexibility**: All primitives support JSON (default), human-readable, and markdown output via `--format`.
+- **Serialization**: Models should be easily serializable to JSON.
 
 ## 🔄 Change Guidance
 
-- **High Impact**: specific primitives are used everywhere. Changing a field in `FileInfo` or `Dependency` will ripple through the entire codebase (parsers, graph, generator).
-- **Versioning**: If the serialization format changes, ensure backward compatibility or bump the manifest version.
+- **High Impact**: Primitives are used by the CLI and exported in `__init__.py`. Changing signatures affects the public API.
+- **Performance**: Monitor execution time. These are the hot path for AI agent queries.
 
 ## 🧭 Navigation
 

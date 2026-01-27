@@ -160,33 +160,44 @@ Use bv instead of parsing beads.jsonl—it computes PageRank, critical paths, cy
 
 ## Using better-context (Codebase Intelligence)
 
-**better-context** is a CLI tool that structures the codebase into AI-consumable context. Use it to generate accurate, data-driven content for `AGENTS.md` files.
+**better-context** is a CLI tool that provides AI-consumable codebase context through fast primitives and deep analysis.
 
-**Crucial:** Before running advanced analysis commands (`stats`, `focus`, `optimize`), you MUST run `better-context scan` to index the codebase and generate the manifest.
+### Fast Primitives (no indexing required)
 
-### Commands for AGENTS.md Generation
+| Command | Output |
+|---------|--------|
+| `better-context overview` | Project metadata (language, framework, package manager) |
+| `better-context tree --depth 2` | Directory structure with file counts |
+| `better-context scripts` | Runnable scripts from package files |
+| `better-context entries` | Entry points (CLI commands, main scripts) |
+| `better-context file <path>` | File metadata, chunks, imports, exports |
 
-| Information Needed | Command | Why it helps |
-|-------------------|---------|--------------|
-| **Project Overview** | `better-context overview --format json` | Identifies primary language, frameworks, and build tools accurately. |
-| **Directory Structure** | `better-context tree --depth 2` | Generates a clean visualization of the file hierarchy for the docs. |
-| **Entry Points** | `better-context entries` | Finds CLI entry points and main scripts automatically. |
-| **Available Scripts** | `better-context scripts` | Lists run/test/build commands defined in package files. |
-| **Key Files** | `better-context stats` | Lists top files by PageRank centrality (mathematical importance). |
+All primitives support `--format json` (default), `--format human`, or `--format markdown`.
 
-### Deep Dive Commands (for coding tasks)
+### Deep Analysis (requires `scan` first)
 
-When you need to understand a specific file or feature:
+Run `better-context scan` once to index the codebase, then use:
 
-1. **Focus Mode (Ego-centric Context)**
-   ```bash
-   better-context focus src/path/to/file.py
-   ```
-   Use this to find **what to read**. It lists dependencies, dependents, related tests, and shared types sorted by relevance.
+| Command | Output |
+|---------|--------|
+| `better-context stats` | Top files by PageRank centrality |
+| `better-context graph -f mermaid` | Dependency graph as Mermaid diagram |
+| `better-context focus <file>` | Ego-centric context (deps, tests, types) |
+| `better-context optimize -b 8000` | Optimal code chunks within token budget |
+| `better-context deps <path>` | Dependencies and dependents for a file |
 
-2. **Token Budget Optimization**
-   ```bash
-   better-context optimize --budget 8000 --task "fix bug in auth"
-   ```
-   Selects the most relevant code chunks that fit in your context window.
+### Typical Workflow
+
+```bash
+# Quick project understanding (150ms total)
+better-context overview
+better-context tree --depth 2
+better-context entries
+
+# Deep analysis for coding tasks
+better-context scan                                  # Index once
+better-context stats                                 # Find important files
+better-context focus src/auth/handler.py             # Context around a file
+better-context optimize -b 8000 --task "fix auth"    # Best chunks for task
+```
 

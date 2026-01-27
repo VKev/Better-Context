@@ -1,11 +1,11 @@
 # Better Context
 
-> AI Agent Codebase Intelligence CLI - Generate AGENTS.md hierarchies
+> AI Agent Codebase Intelligence CLI
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Better Context** transforms unstructured codebases into structured, AI-consumable context using graph theory and fractal summarization. It generates hierarchical AGENTS.md files that AI agents can progressively consume without overwhelming their context windows.
+**Better Context** transforms unstructured codebases into structured, AI-consumable context using graph theory and fast primitives. It provides data primitives that AI agents can query on-demand, along with deep analysis tools for dependency graphs, centrality metrics, and token-optimized context selection.
 
 ## Quick Start
 
@@ -13,11 +13,18 @@
 # Install
 pip install better-context
 
-# Analyze a project
-better-context all ./my-project
+# Fast project overview (no indexing required)
+better-context overview
+better-context tree --depth 2
+better-context scripts
+
+# Deep analysis (requires indexing first)
+better-context scan
+better-context stats
+better-context focus src/main.py
 ```
 
-This scans your codebase, builds a dependency graph, calculates file importance using PageRank, and generates AGENTS.md files at every level of your project hierarchy.
+The fast primitives (`overview`, `tree`, `scripts`, `entries`, `file`, `deps`) return structured data in ~50-200ms without requiring a full codebase scan. For deeper analysis like PageRank centrality and dependency graphs, run `scan` first.
 
 ## Why Better Context?
 
@@ -29,20 +36,29 @@ Traditional approaches to giving AI agents codebase context fall short:
 | Grep-based discovery | Misses relationships |
 | Flat documentation | Lacks navigation structure |
 
-**Better Context v3** solves this with **Fast Primitives**:
+**Better Context** solves this with a two-tier approach:
 
-- **Overview**: 100ms project detection (type, frameworks, tooling)
-- **Tree**: 50ms directory traversal with smart ignoring
-- **Scripts**: 50ms command extraction (npm, poetry, make)
-- **Entries**: 50ms entry point detection
-- **File**: 200ms file parsing (chunks, imports, exports)
-- **Deps**: 100ms dependency analysis
+### Fast Primitives (no indexing required)
 
-Plus deep analysis tools when needed:
-- **Mathematical file ranking** via PageRank centrality
+| Primitive | Purpose | Target Time |
+|-----------|---------|-------------|
+| `overview` | Project type, framework, package manager | ~100ms |
+| `tree` | Directory structure with file counts | ~50ms |
+| `scripts` | Available commands from package files | ~50ms |
+| `entries` | Entry point detection (CLI, main, server) | ~50ms |
+| `file <path>` | Single file metadata, chunks, imports, exports | ~200ms |
+| `deps <path>` | Dependencies and dependents for a file | ~100ms |
+
+### Deep Analysis (requires `scan` first)
+
+- **PageRank centrality** for mathematical file importance ranking
 - **Dependency graph analysis** with cycle detection
+- **Coupling metrics** (Ca/Ce/I/A/D) for architectural health
+- **Architecture layer detection** with violation reporting
+- **Call graph analysis** at the function level
 - **Token budget optimization** for precise context selection
-- **Progressive disclosure** - agents load only what they need
+- **Focus mode** for ego-centric context around a specific file
+- **Semantic anchors** for refactor-stable code references
 
 ## What It Does
 
@@ -75,76 +91,72 @@ cd better-context
 pip install -e ".[dev]"
 ```
 
-## Usage
+## Commands
 
-### Commands
+### Fast Primitives
+
+These commands return structured data without requiring a manifest. Default output is JSON; use `--format human` or `--format markdown` for alternative formats.
 
 | Command | Description |
 |---------|-------------|
-| `better-context overview` | Get project overview (language, framework, tooling) |
-| `better-context tree` | Show directory structure with file counts |
-| `better-context scripts` | List available scripts from package files |
-| `better-context entries` | Find entry points (CLI, main scripts) |
-| `better-context file <path>` | Get metadata, chunks, imports, and exports for a file |
-| `better-context deps <path>` | Get dependencies and dependents for a file |
-| `better-context scan [path]` | Scan codebase and generate manifest |
-| `better-context stats` | Show codebase statistics |
-| `better-context graph` | Export dependency graph |
-| `better-context focus <file>` | Generate context centered on a specific file |
+| `better-context overview` | Project metadata (language, framework, package manager) |
+| `better-context tree` | Directory structure with file counts |
+| `better-context scripts` | Runnable scripts from package files (npm, poetry, make) |
+| `better-context entries` | Entry points (CLI commands, main scripts, servers) |
+| `better-context file <path>` | File metadata, chunks, imports, and exports |
+| `better-context deps <path>` | Dependencies and dependents for a file |
+
+### Deep Analysis
+
+These commands require running `better-context scan` first to build the manifest.
+
+| Command | Description |
+|---------|-------------|
+| `better-context scan [path]` | Index codebase and generate manifest |
+| `better-context stats` | Codebase statistics with PageRank centrality |
+| `better-context graph` | Export dependency graph (Mermaid, DOT, JSON) |
+| `better-context focus <file>` | Ego-centric context centered on a file |
 | `better-context optimize` | Select optimal context within token budget |
-| `better-context verify` | Check if generated context is stale |
-| `better-context clean` | Remove generated files |
+| `better-context verify` | Check if manifest is stale |
+| `better-context clean` | Remove generated files and caches |
 
 ### Examples
 
 ```bash
-# Get quick project overview
-better-context overview
+# Fast primitives (no scan required)
+better-context overview                          # Project metadata as JSON
+better-context overview --format human           # Human-readable output
+better-context tree --depth 3                    # Directory tree, 3 levels deep
+better-context scripts --format markdown         # Scripts as markdown table
+better-context entries                           # Find entry points
+better-context file src/auth/jwt.py              # Analyze single file
+better-context file src/api/routes.ts --format human
 
-# See directory structure
-better-context tree --depth 2
+# Deep analysis (run scan first)
+better-context scan                              # Index codebase
+better-context scan --out manifest.json          # Custom output path
+better-context stats                             # PageRank-ranked files
+better-context stats --json                      # Stats as JSON
 
-# Inspect a specific file
-better-context file src/auth/jwt.py
+# Dependency graph export
+better-context graph -f mermaid > deps.md        # Mermaid diagram
+better-context graph -f dot > deps.dot           # Graphviz DOT
+better-context graph -f json > deps.json         # JSON for custom tools
 
-# Check dependencies
-better-context deps src/auth/jwt.py
+# Focus mode
+better-context focus src/auth/jwt.py             # Context around a file
+better-context focus src/auth/jwt.py --depth 2   # Limit exploration depth
+better-context focus src/auth/jwt.py --json      # Output as JSON
 
-# Analyze specific project with verbose output
-better-context scan ./my-project -v
+# Token budget optimization
+better-context optimize --budget 8000            # Select best context
+better-context optimize -b 4000 -k auth user     # Boost relevance by keywords
+better-context optimize -b 8000 --task "fix auth bug"
 
-# Generate only the manifest (for debugging)
-better-context scan --out manifest.json
-
-# Export dependency graph as Mermaid
-better-context graph -f mermaid > deps.md
-
-# Export as Graphviz DOT
-better-context graph -f dot > deps.dot
-
-# Export as JSON (for custom visualization)
-better-context graph -f json > deps.json
-
-# Show statistics as JSON
-better-context stats --json
-
-# Generate focused context for a specific file
-better-context focus src/auth/jwt.py --depth 3
-
-# Focus mode with JSON output
-better-context focus src/api/handler.py --json
-
-# Select optimal context within 8000 token budget
-better-context optimize --budget 8000
-
-# Optimize with keywords to boost relevance
-better-context optimize -b 4000 -k auth user session
-
-# Optimize for a specific task
-better-context optimize -b 8000 --task "implement user authentication"
-
-# Clean only cache files, keep AGENTS.md
-better-context clean --cache-only
+# Maintenance
+better-context verify                            # Check if manifest is stale
+better-context clean                             # Remove all generated files
+better-context clean --cache-only                # Keep manifest, remove cache
 ```
 
 ### Global Options
@@ -401,31 +413,53 @@ src/better_context/
 ├── graph.py            # Dependency graph construction
 ├── centrality.py       # PageRank and cycle detection
 ├── resolution.py       # Import resolution
-├── generator.py        # AGENTS.md generation
 ├── optimizer.py        # Token budget optimizer
+├── focus.py            # Ego-centric context generation
 ├── semantic_anchor.py  # Content-addressable chunk IDs
+├── staleness.py        # Manifest freshness detection
 ├── tree.py             # Directory tree builder
 ├── visualize.py        # Graph export (Mermaid, DOT, JSON)
 ├── errors.py           # Error handling
 ├── chunker.py          # Code chunking
+├── cache.py            # Incremental parse caching
+├── callgraph.py        # Function-level call graph analysis
+├── coupling.py         # Coupling metrics (Ca/Ce/I/A/D)
+├── architecture.py     # Architecture layer detection
+├── orchestrator.py     # High-level analysis coordination
+├── primitives/         # Fast data primitives
+│   ├── overview.py     # Project metadata extraction
+│   ├── tree.py         # Directory structure
+│   ├── scripts.py      # Script extraction
+│   ├── entries.py      # Entry point detection
+│   ├── file_info.py    # Single file analysis
+│   ├── deps.py         # Dependency lookup
+│   └── formatters.py   # Output formatters (JSON, human, markdown)
 └── languages/          # Language adapters
     ├── base.py         # Adapter interface
     ├── python.py       # Python adapter
-    ├── typescript.py   # TypeScript/JS adapter
-    └── go.py           # Go adapter (WIP)
+    ├── typescript.py   # TypeScript/JavaScript adapter
+    └── go.py           # Go adapter
 ```
 
 ## Roadmap
 
-### Post-MVP Features
+### Implemented Features
 
-- **Bridge File Detection**: Use betweenness centrality to find critical connector files ✅
-- **Auto-Generated Architecture Diagrams**: Mermaid diagrams from dependency graph ✅
-- **Focus Mode**: Generate context centered on a specific file ✅
-- **Token Budget Optimizer**: Select optimal context within token limits ✅
-- **MCP Server Mode**: Run as a Model Context Protocol server
-- **Semantic Anchors**: Content-addressable chunk IDs that survive refactoring ✅
-- **Context Staleness Detection**: Hash-based verification of generated context ✅
+- **Fast Primitives**: Sub-200ms queries for project metadata, tree, scripts, entries, file info, and dependencies
+- **Bridge File Detection**: Betweenness centrality identifies critical connector files
+- **Auto-Generated Architecture Diagrams**: Mermaid diagrams from dependency graph
+- **Focus Mode**: Ego-centric context centered on a specific file
+- **Token Budget Optimizer**: Greedy and knapsack algorithms for budget-constrained selection
+- **Semantic Anchors**: Content-addressable chunk IDs that survive refactoring
+- **Context Staleness Detection**: Hash-based verification of manifest freshness
+- **Coupling Metrics**: Ca/Ce/I/A/D metrics for architectural health analysis
+- **Architecture Layer Detection**: Automatic classification into presentation/application/domain/infrastructure layers
+- **Call Graph Analysis**: Function-level call tracking and hot path detection
+- **Incremental Caching**: Hash-based parse cache for fast subsequent scans
+
+### Planned Features
+
+- **MCP Server Mode**: Run as a Model Context Protocol server for IDE integration
 
 ## Focus Mode
 
@@ -576,15 +610,109 @@ update_anchor_mapping(mapping, anchor, "src/utils.py", 10, "src/utils.py:10:func
 path, line = resolve_anchor(mapping, anchor)
 ```
 
+## Coupling Metrics
+
+Better Context calculates Robert C. Martin's package coupling metrics to evaluate module stability and architectural health:
+
+| Metric | Name | Description |
+|--------|------|-------------|
+| **Ca** | Afferent Coupling | Number of modules that depend ON this module |
+| **Ce** | Efferent Coupling | Number of modules this module depends ON |
+| **I** | Instability | Ce / (Ca + Ce) — 0 = stable, 1 = unstable |
+| **A** | Abstractness | Abstract definitions / total definitions |
+| **D** | Distance | \|A + I - 1\| — 0 = ideal (on the main sequence) |
+
+### Zone Analysis
+
+Modules are classified into architectural zones:
+
+- **Main Sequence** (D ≈ 0): Healthy balance of stability and abstractness
+- **Zone of Pain** (I ≈ 0, A ≈ 0): Stable but concrete — hard to extend
+- **Zone of Uselessness** (I ≈ 1, A ≈ 1): Unstable and abstract — likely unused
+
+### API
+
+```python
+from better_context import calculate_all_coupling_metrics, generate_zone_report
+
+# Calculate metrics for all files
+metrics = calculate_all_coupling_metrics(graph, file_entries)
+
+# Generate zone classification report
+report = generate_zone_report(metrics)
+print(f"Files on main sequence: {len(report.on_main_sequence)}")
+print(f"Files in zone of pain: {len(report.zone_of_pain)}")
+```
+
+## Architecture Layer Detection
+
+Better Context automatically classifies files into architectural layers using directory naming patterns, import direction analysis, and export type analysis:
+
+| Layer | Description | Examples |
+|-------|-------------|----------|
+| **Presentation** | UI components, views, pages | `components/`, `pages/`, `views/` |
+| **Application** | Use cases, handlers, controllers | `handlers/`, `controllers/`, `usecases/` |
+| **Domain** | Business logic, models, entities | `models/`, `domain/`, `entities/` |
+| **Infrastructure** | Database, external APIs, adapters | `db/`, `adapters/`, `repositories/` |
+| **Shared** | Cross-cutting utilities, types | `utils/`, `types/`, `helpers/` |
+
+### Layer Violation Detection
+
+The tool detects when lower layers import from higher layers (e.g., infrastructure importing from presentation), which violates clean architecture principles.
+
+### API
+
+```python
+from better_context import analyze_architecture
+
+# Analyze architecture and detect violations
+report = analyze_architecture(graph, file_entries)
+
+for violation in report.violations:
+    print(f"{violation.source_path} ({violation.source_layer}) "
+          f"imports {violation.target_path} ({violation.target_layer})")
+```
+
+## Call Graph Analysis
+
+Better Context builds function-level call graphs showing which functions call which other functions, enabling deeper code flow understanding beyond file-level imports.
+
+### Features
+
+- **Call Site Extraction**: Identifies function calls within function bodies
+- **Symbol Resolution**: Resolves call targets to specific chunk IDs
+- **Forward/Reverse Indices**: Quick lookup of callers and callees
+- **Hot Path Detection**: Identifies frequently-called functions
+- **Impact Analysis**: Determines what's affected by changing a function
+
+### API
+
+```python
+from better_context import build_call_graph, get_callers, get_callees
+
+# Build call graph from manifest
+call_graph = build_call_graph(manifest)
+
+# Find all functions that call a specific function
+callers = get_callers(call_graph, "src/auth.py:validate_token")
+
+# Find all functions called by a specific function
+callees = get_callees(call_graph, "src/api/routes.py:handle_request")
+```
+
 ## Troubleshooting
+
+### "Manifest not found"
+
+Run `better-context scan` first to index the codebase. The `stats`, `graph`, `focus`, `optimize`, `verify`, and `deps` commands require an existing manifest.
 
 ### "No files found"
 
-Check your `.ctxignore` patterns and ensure the directory contains supported file types.
+Check your `.ctxignore` patterns and ensure the directory contains supported file types (Python, TypeScript, JavaScript, Go).
 
 ### "Circular dependency detected"
 
-This is informational - circular dependencies are reported but don't prevent analysis. Consider refactoring to break the cycle at the suggested point.
+This is informational — circular dependencies are reported but don't prevent analysis. Consider refactoring to break the cycle at the suggested point.
 
 ### "File too large"
 
@@ -602,9 +730,3 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-Built with ❤️ for AI agents everywhere.
-# better-agents-md
-# better-agents-md

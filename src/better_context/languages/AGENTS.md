@@ -8,12 +8,12 @@ This directory contains adapters that implement the parsing logic for different 
 
 ## 🔑 Key Components
 
-| File | Responsibility |
-|------|----------------|
-| **Base Adapter** | [`base.py`](./base.py) | Abstract base class defining the `LanguageAdapter` interface. |
-| **Python** | [`python.py`](./python.py) | Python parser (imports, classes, functions). |
-| **TypeScript** | [`typescript.py`](./typescript.py) | TS/JS parser (imports, exports, types). |
-| **Go** | [`go.py`](./go.py) | Go parser (WIP). |
+| File | Description |
+|------|-------------|
+| [`base.py`](./base.py) | Abstract base class defining the `LanguageAdapter` interface |
+| [`python.py`](./python.py) | Python parser (imports, classes, functions, decorators) |
+| [`typescript.py`](./typescript.py) | TypeScript/JavaScript parser (imports, exports, types, JSX) |
+| [`go.py`](./go.py) | Go parser (imports, functions, structs, interfaces) |
 
 ## 🧩 Architecture
 
