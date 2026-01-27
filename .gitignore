@@ -38,3 +38,4 @@ Thumbs.db
 # Beads database (local state)
 .beads/*.db
 .beads/daemon.*
+.docs/
