@@ -36,6 +36,12 @@ build/
 Thumbs.db
 
 # Beads database (local state)
-.beads/*.db
-.beads/daemon.*
+.beads/
+
+# Agent coordination
+.agents/
+
+# Planning and version docs
+v3.md
+better-context-plan.md
 .docs/
