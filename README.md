@@ -23,6 +23,31 @@ uv run better-context-unity --root D:\Path\To\UnityProject agents --dry-run
 uv run better-context-unity --root D:\Path\To\UnityProject agents
 ```
 
+Maps stay structural by default. When an AI agent decides that a durable
+description would improve navigation, it can add optional summaries in the
+same call:
+
+```powershell
+uv run better-context-unity --root D:\Path\To\UnityProject agents `
+  --summary 'Assets/Scripts=Runtime gameplay scripts.' `
+  --summary 'Assets/Scripts/GameManager.cs=Coordinates game state and scene transitions.'
+```
+
+`--summary PATH=TEXT` is repeatable and accepts a project-relative file or
+folder. Summaries are stored in `.ctx-summaries.json`, so later `agents` runs
+keep them without requiring the AI to repeat the text. To correct or remove
+one:
+
+```powershell
+uv run better-context-unity --root D:\Path\To\UnityProject agents `
+  --remove-summary 'Assets/Scripts/GameManager.cs'
+```
+
+The CLI does not call an LLM or invent summaries. It only validates and stores
+text explicitly supplied by the caller. Summary text is limited to 240
+characters to keep maps compact. `--dry-run` never changes either maps or the
+summary store.
+
 Install the custom CLI locally while developing the fork:
 
 ```powershell
@@ -85,7 +110,7 @@ direct source verification before making behavior or refactor claims.
 
 | Command | Purpose |
 |---|---|
-| `agents` | Scan and safely refresh hierarchical `AGENTS.md` maps |
+| `agents` | Scan and safely refresh maps; optionally add/remove persisted summaries |
 | `scan` | Create `.better-context/manifest.json` without changing maps |
 | `overview` | Detect Unity/C# project metadata |
 | `tree` | Show a compact directory summary |

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -13,6 +15,8 @@ BEGIN = "<!-- better-context-unity:begin -->"
 END = "<!-- better-context-unity:end -->"
 MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTALL)
 UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
+SUMMARY_FILE = ".ctx-summaries.json"
+MAX_SUMMARY_LENGTH = 240
 
 
 @dataclass
@@ -28,16 +32,25 @@ def generate_agents_map(
     output_root: Path,
     max_depth: int = -1,
     dry_run: bool = False,
+    summaries: Mapping[str, str] | None = None,
 ) -> MapResult:
     """Create or refresh only the marked map block in each AGENTS.md."""
     output_root = output_root.resolve()
     unity = _is_unity_project(output_root)
     directories = _collect_directories(manifest, unity, max_depth)
+    summaries = summaries or {}
     result = MapResult()
 
     for rel_dir in sorted(directories, key=lambda value: (value.count("/"), value)):
         target = output_root / Path(rel_dir) / "AGENTS.md" if rel_dir else output_root / "AGENTS.md"
-        managed = _render_directory(rel_dir, directories, manifest, graph, unity)
+        managed = _render_directory(
+            rel_dir,
+            directories,
+            manifest,
+            graph,
+            unity,
+            summaries,
+        )
         try:
             current = target.read_text(encoding="utf-8") if target.exists() else ""
             updated = _merge_managed_block(current, managed)
@@ -82,6 +95,7 @@ def _render_directory(
     manifest: Manifest,
     graph: DependencyGraph,
     unity: bool,
+    summaries: Mapping[str, str],
 ) -> str:
     direct_files = [
         entry
@@ -93,20 +107,41 @@ def _render_directory(
         "Unity project map" if not rel_dir and unity else f"Folder map: {rel_dir or 'repository'}"
     )
     lines = [BEGIN, f"## {title}", "", _purpose(rel_dir, unity), ""]
+    if rel_dir in summaries:
+        lines.extend([f"**Summary:** {_summary_cell(summaries[rel_dir])}", ""])
 
     if children:
-        lines.extend(["### Child folders", "", "| Folder | Purpose |", "|---|---|"])
+        has_summaries = any(child in summaries for child in children)
+        header = "| Folder | Purpose | Summary |" if has_summaries else "| Folder | Purpose |"
+        divider = "|---|---|---|" if has_summaries else "|---|---|"
+        lines.extend(["### Child folders", "", header, divider])
         for child in children:
             name = PurePosixPath(child).name
-            lines.append(f"| [`{name}/`]({name}/AGENTS.md) | {_purpose(child, unity)} |")
+            row = f"| [`{name}/`]({name}/AGENTS.md) | {_purpose(child, unity)}"
+            if has_summaries:
+                row += f" | {_summary_cell(summaries.get(child, '—'))}"
+            lines.append(row + " |")
         lines.append("")
 
     if direct_files:
-        lines.extend(["### Files", "", "| File | Role |", "|---|---|"])
-        for entry in sorted(direct_files, key=lambda item: item.path)[:40]:
-            lines.append(f"| `{PurePosixPath(entry.path).name}` | {_file_role(entry, graph)} |")
-        if len(direct_files) > 40:
-            lines.append(f"| … | {len(direct_files) - 40} additional files; inspect on demand. |")
+        has_summaries = any(entry.path in summaries for entry in direct_files)
+        header = "| File | Role | Summary |" if has_summaries else "| File | Role |"
+        divider = "|---|---|---|" if has_summaries else "|---|---|"
+        lines.extend(["### Files", "", header, divider])
+        ordered_files = sorted(
+            direct_files,
+            key=lambda entry: (entry.path not in summaries, entry.path),
+        )
+        visible_limit = max(40, sum(entry.path in summaries for entry in direct_files))
+        for entry in ordered_files[:visible_limit]:
+            row = f"| `{PurePosixPath(entry.path).name}` | {_file_role(entry, graph)}"
+            if has_summaries:
+                row += f" | {_summary_cell(summaries.get(entry.path, '—'))}"
+            lines.append(row + " |")
+        if len(direct_files) > visible_limit:
+            remaining = len(direct_files) - visible_limit
+            row = f"| … | {remaining} additional files; inspect on demand."
+            lines.append(row + (" | — |" if has_summaries else " |"))
         lines.append("")
 
     if rel_dir:
@@ -182,6 +217,87 @@ def _file_role(entry: FileEntry, graph: DependencyGraph) -> str:
     return roles.get(suffix, "Project file.")
 
 
+def parse_summary_assignment(value: str) -> tuple[str, str]:
+    """Parse a CLI PATH=TEXT summary assignment."""
+    if "=" not in value:
+        raise ValueError("Summary must use PATH=TEXT format")
+    raw_path, raw_text = value.split("=", 1)
+    return normalize_summary_path(raw_path), normalize_summary_text(raw_text)
+
+
+def normalize_summary_path(value: str) -> str:
+    """Normalize and validate a project-relative summary target."""
+    normalized = value.strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
+    if normalized in {"", "."}:
+        return ""
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts or re.match(r"^[A-Za-z]:", normalized):
+        raise ValueError("Summary path must be relative to the project root")
+    return path.as_posix()
+
+
+def normalize_summary_text(value: str) -> str:
+    """Keep summaries compact enough for navigation maps."""
+    normalized = " ".join(value.split())
+    if not normalized:
+        raise ValueError("Summary text cannot be empty")
+    if len(normalized) > MAX_SUMMARY_LENGTH:
+        raise ValueError(f"Summary text cannot exceed {MAX_SUMMARY_LENGTH} characters")
+    return normalized
+
+
+def load_summaries(root: Path) -> dict[str, str]:
+    """Load optional persisted summaries from the project root."""
+    path = root / SUMMARY_FILE
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read {SUMMARY_FILE}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{SUMMARY_FILE} must contain a JSON object")
+
+    summaries: dict[str, str] = {}
+    for raw_path, raw_text in data.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_text, str):
+            raise ValueError(f"{SUMMARY_FILE} keys and values must be strings")
+        summaries[normalize_summary_path(raw_path)] = normalize_summary_text(raw_text)
+    return summaries
+
+
+def save_summaries(root: Path, summaries: Mapping[str, str]) -> Path:
+    """Persist optional summaries, or remove the empty ledger."""
+    path = root / SUMMARY_FILE
+    if summaries:
+        ordered = {path or ".": text for path, text in sorted(summaries.items())}
+        path.write_text(
+            json.dumps(ordered, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    elif path.exists():
+        path.unlink()
+    return path
+
+
+def summary_targets(manifest: Manifest, root: Path, max_depth: int = -1) -> set[str]:
+    """Return file and folder paths that can appear in generated maps."""
+    directories = _collect_directories(manifest, _is_unity_project(root), max_depth)
+    files = {
+        entry.path
+        for entry in manifest.files
+        if _parent(entry.path) in directories and PurePosixPath(entry.path).name != "AGENTS.md"
+    }
+    return directories | files
+
+
+def _summary_cell(value: str) -> str:
+    return " ".join(value.split()).replace("|", r"\|")
+
+
 def _merge_managed_block(current: str, managed: str) -> str:
     if MANAGED_PATTERN.search(current):
         return MANAGED_PATTERN.sub(managed.rstrip(), current).rstrip() + "\n"
@@ -208,4 +324,17 @@ def remove_managed_map(path: Path) -> bool:
     return True
 
 
-__all__ = ["MapResult", "generate_agents_map", "remove_managed_map", "BEGIN", "END"]
+__all__ = [
+    "BEGIN",
+    "END",
+    "MAX_SUMMARY_LENGTH",
+    "MapResult",
+    "SUMMARY_FILE",
+    "generate_agents_map",
+    "load_summaries",
+    "normalize_summary_path",
+    "parse_summary_assignment",
+    "remove_managed_map",
+    "save_summaries",
+    "summary_targets",
+]

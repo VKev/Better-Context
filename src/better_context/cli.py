@@ -9,7 +9,7 @@ import sys
 from collections import Counter
 from importlib.metadata import version as get_version
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .config import load_config
 
@@ -50,7 +50,16 @@ from .primitives.formatters import (
 )
 from .graph import build_dependency_graph, build_graph_from_edges
 from .scanner import walk_repository, FileInventory
-from .agents_map import generate_agents_map, remove_managed_map
+from .agents_map import (
+    SUMMARY_FILE,
+    generate_agents_map,
+    load_summaries,
+    normalize_summary_path,
+    parse_summary_assignment,
+    remove_managed_map,
+    save_summaries,
+    summary_targets,
+)
 
 
 def add_common_primitive_args(parser: argparse.ArgumentParser) -> None:
@@ -151,6 +160,20 @@ Agent Workflow:
         "--dry-run",
         action="store_true",
         help="Report maps that would change without writing them",
+    )
+    agents_parser.add_argument(
+        "--summary",
+        action="append",
+        default=[],
+        metavar="PATH=TEXT",
+        help="Add or replace an optional persisted file/folder summary; repeatable",
+    )
+    agents_parser.add_argument(
+        "--remove-summary",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Remove a persisted summary before refreshing maps; repeatable",
     )
 
     # --- overview command ---
@@ -377,7 +400,7 @@ def get_manifest_path(args: argparse.Namespace) -> Path:
     root = getattr(args, 'root', Path('.'))
     config = load_config(root)
     if hasattr(args, 'manifest') and args.manifest:
-        return args.manifest
+        return Path(args.manifest)
     return root / config.output_dir / config.manifest_file
 
 
@@ -438,8 +461,41 @@ def cmd_agents(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     print(f"[agents] Analyzing {root}...")
     try:
+        stored_summaries = load_summaries(root)
+        updates: dict[str, str] = {}
+        for assignment in args.summary:
+            path, summary = parse_summary_assignment(assignment)
+            updates[path] = summary
+        removals = {normalize_summary_path(path) for path in args.remove_summary}
+        overlap = sorted(updates.keys() & removals)
+        if overlap:
+            raise ValueError(f"Cannot add and remove the same summary: {overlap[0] or '.'}")
+
         orchestrator = Orchestrator(root)
         analysis = orchestrator.analyze()
+        targets = summary_targets(analysis.manifest, root, args.max_depth)
+        invalid_updates = sorted(path for path in updates if path not in targets)
+        invalid_removals = sorted(
+            path for path in removals if path not in targets and path not in stored_summaries
+        )
+        invalid = invalid_updates or invalid_removals
+        if invalid:
+            target = invalid[0] or "."
+            raise ValueError(f"Summary target is not present in generated maps: {target}")
+
+        summaries = dict(stored_summaries)
+        for path in removals:
+            summaries.pop(path, None)
+        summaries.update(updates)
+        summaries_changed = summaries != stored_summaries
+        if summaries_changed:
+            action = "Would store" if args.dry_run else "Stored"
+            print(f"[agents] {action} {len(summaries)} optional summary(s) in {SUMMARY_FILE}")
+            if not args.dry_run:
+                save_summaries(root, summaries)
+                orchestrator = Orchestrator(root)
+                analysis = orchestrator.analyze()
+
         if not args.dry_run:
             manifest_path = orchestrator.save_manifest(analysis.manifest)
             print(f"[agents] Manifest saved to {manifest_path}")
@@ -449,9 +505,13 @@ def cmd_agents(args: argparse.Namespace) -> int:
             root,
             max_depth=args.max_depth,
             dry_run=args.dry_run,
+            summaries=summaries,
         )
         action = "would update" if args.dry_run else "updated"
-        print(f"[agents] {action} {len(result.files_written)} map(s); {len(result.unchanged)} unchanged")
+        print(
+            f"[agents] {action} {len(result.files_written)} map(s); "
+            f"{len(result.unchanged)} unchanged"
+        )
         for path in result.files_written:
             print(f"  - {path}")
         for error in result.errors:
@@ -498,7 +558,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
         reverse=True
     )[:5]
     
-    stats = {
+    stats: dict[str, Any] = {
         'files': len(manifest.files),
         'total_bytes': total_bytes,
         'chunks': total_chunks,

@@ -87,3 +87,4 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 norecursedirs = ["tests/fixtures"]
 addopts = "-v --tb=short"
+markers = ["perf: performance and scale checks"]

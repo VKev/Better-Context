@@ -1,10 +1,17 @@
 """Unity and C# behavior added by the custom fork."""
 
+import json
 from pathlib import Path
 
 import pytest
 
-from better_context.agents_map import BEGIN, END, generate_agents_map, remove_managed_map
+from better_context.agents_map import (
+    BEGIN,
+    END,
+    SUMMARY_FILE,
+    generate_agents_map,
+    remove_managed_map,
+)
 from better_context.cli import main
 from better_context.languages.csharp import CSharpAdapter
 from better_context.orchestrator import Orchestrator
@@ -98,6 +105,7 @@ def test_agents_map_preserves_handwritten_content_and_is_idempotent(unity_projec
     assert "Do not replace me." in root_map
     assert root_map.count(BEGIN) == 1
     assert "PlayerController (MonoBehaviour)" in scripts_map
+    assert "| File | Role | Summary |" not in scripts_map
     assert not (unity_project / "Library" / "AGENTS.md").exists()
 
     refreshed = Orchestrator(unity_project).analyze()
@@ -117,3 +125,125 @@ def test_agents_cli_writes_context_that_verifies_fresh(unity_project: Path, caps
     assert (unity_project / ".better-context" / "manifest.json").is_file()
     assert (unity_project / ".better-context" / "staleness.json").is_file()
     assert main(["--root", str(unity_project), "verify"]) == 0
+
+
+def test_agents_cli_adds_and_persists_optional_summaries(unity_project: Path, capsys):
+    args = [
+        "--root",
+        str(unity_project),
+        "agents",
+        "--summary",
+        "Assets/Scripts=Runtime character and combat scripts.",
+        "--summary",
+        "Assets\\Scripts\\PlayerController.cs=Coordinates player control | damage handling.",
+    ]
+    assert main(args) == 0
+    capsys.readouterr()
+
+    stored = json.loads((unity_project / SUMMARY_FILE).read_text(encoding="utf-8"))
+    assert stored == {
+        "Assets/Scripts": "Runtime character and combat scripts.",
+        "Assets/Scripts/PlayerController.cs": "Coordinates player control | damage handling.",
+    }
+
+    assets_map = (unity_project / "Assets" / "AGENTS.md").read_text(encoding="utf-8")
+    scripts_map = (unity_project / "Assets" / "Scripts" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "| Folder | Purpose | Summary |" in assets_map
+    assert "Runtime character and combat scripts." in assets_map
+    assert "| File | Role | Summary |" in scripts_map
+    assert r"Coordinates player control \| damage handling." in scripts_map
+
+    assert main(["--root", str(unity_project), "agents"]) == 0
+    refreshed = (unity_project / "Assets" / "Scripts" / "AGENTS.md").read_text(encoding="utf-8")
+    assert r"Coordinates player control \| damage handling." in refreshed
+
+
+def test_agents_cli_can_remove_optional_summary(unity_project: Path, capsys):
+    target = "Assets/Scripts/DamageSystem.cs"
+    assert (
+        main(["--root", str(unity_project), "agents", "--summary", f"{target}=Applies damage."])
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(
+        [
+            "--root",
+            str(unity_project),
+            "agents",
+            "--dry-run",
+            "--remove-summary",
+            target,
+        ]
+    ) == 0
+    assert (unity_project / SUMMARY_FILE).exists()
+
+    assert main(["--root", str(unity_project), "agents", "--remove-summary", target]) == 0
+    assert not (unity_project / SUMMARY_FILE).exists()
+    scripts_map = (unity_project / "Assets" / "Scripts" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Applies damage." not in scripts_map
+    assert "| File | Role | Summary |" not in scripts_map
+
+
+def test_agents_cli_summary_dry_run_does_not_write(unity_project: Path):
+    assert (
+        main(
+            [
+                "--root",
+                str(unity_project),
+                "agents",
+                "--dry-run",
+                "--summary",
+                "Assets/Scripts=Runtime scripts.",
+            ]
+        )
+        == 0
+    )
+    assert not (unity_project / SUMMARY_FILE).exists()
+    assert not (unity_project / "Assets" / "AGENTS.md").exists()
+
+
+def test_agents_cli_rejects_unknown_summary_target(unity_project: Path, capsys):
+    assert (
+        main(
+            [
+                "--root",
+                str(unity_project),
+                "agents",
+                "--summary",
+                "Assets/Missing=Does not exist.",
+            ]
+        )
+        == 1
+    )
+    assert "Summary target is not present" in capsys.readouterr().out
+    assert not (unity_project / SUMMARY_FILE).exists()
+
+
+def test_agents_cli_does_not_overwrite_invalid_summary_store(unity_project: Path, capsys):
+    store = unity_project / SUMMARY_FILE
+    store.write_text("{invalid", encoding="utf-8")
+
+    assert main(["--root", str(unity_project), "agents"]) == 1
+    assert f"Cannot read {SUMMARY_FILE}" in capsys.readouterr().out
+    assert store.read_text(encoding="utf-8") == "{invalid"
+
+
+@pytest.mark.parametrize(
+    ("assignment", "message"),
+    [
+        ("Assets/Scripts", "PATH=TEXT"),
+        ("Assets/Scripts=", "cannot be empty"),
+        (f"Assets/Scripts={'x' * 241}", "cannot exceed 240"),
+        (r"C:\Project\File.cs=Absolute path.", "relative to the project root"),
+    ],
+)
+def test_agents_cli_rejects_invalid_summary_input(
+    unity_project: Path,
+    capsys,
+    assignment: str,
+    message: str,
+):
+    assert main(["--root", str(unity_project), "agents", "--summary", assignment]) == 1
+    assert message in capsys.readouterr().out
+    assert not (unity_project / SUMMARY_FILE).exists()

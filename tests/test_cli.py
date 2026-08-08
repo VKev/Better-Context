@@ -18,11 +18,9 @@ def test_version_action():
     assert any(a.option_strings == ["--version"] for a in parser._actions)
 
 
-def test_main_with_help(capsys):
+def test_main_with_help():
     """Test main with no args shows help."""
-    # main() with no command should fail with error
-    result = main(["--help"])
-    # Note: --help raises SystemExit(0)
+    assert main(["--help"]) == 0
 
 
 def test_scan_command():
@@ -34,9 +32,20 @@ def test_scan_command():
 
 def test_agents_command():
     parser = create_parser()
-    args = parser.parse_args(["agents", "--dry-run"])
+    args = parser.parse_args(
+        [
+            "agents",
+            "--dry-run",
+            "--summary",
+            "Assets/Scripts=Runtime scripts.",
+            "--remove-summary",
+            "Assets/Old",
+        ]
+    )
     assert args.command == "agents"
     assert args.dry_run is True
+    assert args.summary == ["Assets/Scripts=Runtime scripts."]
+    assert args.remove_summary == ["Assets/Old"]
 
 
     # test_all_command removed as command is deprecated/removed

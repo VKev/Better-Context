@@ -35,7 +35,7 @@ from .manifest import (
     GraphData, ParseError, create_manifest_meta, save_manifest, load_manifest,
     MANIFEST_VERSION,
 )
-from .agents_map import generate_agents_map
+from .agents_map import generate_agents_map, load_summaries
 from .staleness import save_staleness_info
 
 
@@ -239,6 +239,7 @@ class Orchestrator:
             graph,
             output_root or self.root,
             max_depth=max_depth,
+            summaries=load_summaries(self.root),
         )
     
     def save_manifest(self, manifest: Manifest, path: Optional[Path] = None) -> Path:
