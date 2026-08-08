@@ -7,7 +7,7 @@ def test_parser_creation():
     """Test that parser is created successfully."""
     parser = create_parser()
     assert parser is not None
-    assert parser.prog == "better-context"
+    assert parser.prog == "better-context-unity"
 
 
 def test_version_action():
@@ -30,6 +30,13 @@ def test_scan_command():
     parser = create_parser()
     args = parser.parse_args(["scan", "."])
     assert args.command == "scan"
+
+
+def test_agents_command():
+    parser = create_parser()
+    args = parser.parse_args(["agents", "--dry-run"])
+    assert args.command == "agents"
+    assert args.dry_run is True
 
 
     # test_all_command removed as command is deprecated/removed

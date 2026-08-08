@@ -40,7 +40,7 @@ class TestManifestMeta:
         meta = create_manifest_meta(Path("/tmp/project"), "abc123")
         
         assert meta.version == MANIFEST_VERSION
-        assert meta.generator == f"better-context/{MANIFEST_VERSION}"
+        assert meta.generator == f"better-context-unity/{MANIFEST_VERSION}"
         assert "/tmp/project" in meta.root_path
         assert meta.config_hash == "abc123"
         assert meta.generated_at  # Should be non-empty ISO timestamp

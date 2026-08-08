@@ -37,6 +37,28 @@ DEFAULT_IGNORES: List[str] = [
     'out/',
     '.nuxt/',
     '.output/',
+
+    # Unity generated state and IDE output
+    'Library/',
+    'Temp/',
+    'Logs/',
+    'Obj/',
+    'Build/',
+    'Builds/',
+    'UserSettings/',
+    'MemoryCaptures/',
+    'Recordings/',
+    '.vs/',
+
+    # Agent/tool state is not project architecture
+    '.agents/',
+    '.codex/',
+    '.claude/',
+    '.serena/',
+    '.beads/',
+    '.codegraph/',
+    '.cocoindex_code/',
+    '.custom-repo/',
     
     # IDE/Editor
     '.idea/',

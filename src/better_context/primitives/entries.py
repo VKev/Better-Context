@@ -80,7 +80,7 @@ def analyze_entry_points(root: Path) -> EntriesResult:
                         full_path = root / module_path
                     
                     if full_path.exists():
-                        rel_path = str(full_path.relative_to(root))
+                        rel_path = full_path.relative_to(root).as_posix()
                         entry_points.append(EntryPoint(
                             path=rel_path,
                             type="cli",
@@ -104,7 +104,7 @@ def analyze_entry_points(root: Path) -> EntriesResult:
                     for cand in candidates:
                         if cand.exists():
                             entry_points.append(EntryPoint(
-                                path=str(cand.relative_to(root)),
+                                path=cand.relative_to(root).as_posix(),
                                 type="cli",
                                 language="python",
                                 name=name
@@ -124,7 +124,7 @@ def analyze_entry_points(root: Path) -> EntriesResult:
                 bins = content["bin"]
                 if isinstance(bins, str):
                     # Single bin
-                    path = str(Path(bins))
+                    path = Path(bins).as_posix()
                     entry_points.append(EntryPoint(
                         path=path,
                         type="cli",
@@ -135,7 +135,7 @@ def analyze_entry_points(root: Path) -> EntriesResult:
                     # Multiple bins
                     for name, path in bins.items():
                         entry_points.append(EntryPoint(
-                            path=str(Path(path)),
+                            path=Path(path).as_posix(),
                             type="cli",
                             language="javascript", # infer
                             name=name
@@ -169,7 +169,7 @@ def analyze_entry_points(root: Path) -> EntriesResult:
         path = root / filename
         if path.exists():
             # Avoid duplicates if detected via config
-            rel = str(path.relative_to(root))
+            rel = path.relative_to(root).as_posix()
             if not any(e.path == rel for e in entry_points):
                 entry_points.append(EntryPoint(
                     path=rel,
@@ -184,7 +184,7 @@ def analyze_entry_points(root: Path) -> EntriesResult:
         for filename, type_hint in patterns:
             path = src_dir / filename
             if path.exists():
-                rel = str(path.relative_to(root))
+                rel = path.relative_to(root).as_posix()
                 if not any(e.path == rel for e in entry_points):
                     entry_points.append(EntryPoint(
                         path=rel,

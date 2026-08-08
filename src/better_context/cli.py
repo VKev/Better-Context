@@ -16,12 +16,17 @@ from .config import load_config
 def _get_version() -> str:
     """Get package version from metadata."""
     try:
-        return get_version("better-context")
+        return get_version("better-context-unity")
     except Exception:
-        return "1.0.0"  # Fallback for editable installs
+        return "1.1.0"  # Fallback for editable installs
 from .manifest import load_manifest, Manifest
 from .orchestrator import Orchestrator, generate_context
-from .staleness import check_staleness, format_staleness_report, load_staleness_info
+from .staleness import (
+    check_staleness,
+    format_staleness_report,
+    load_staleness_info,
+    save_staleness_info,
+)
 from .primitives.overview import analyze_overview
 from .primitives.tree import analyze_tree
 from .primitives.scripts import analyze_scripts
@@ -45,6 +50,7 @@ from .primitives.formatters import (
 )
 from .graph import build_dependency_graph, build_graph_from_edges
 from .scanner import walk_repository, FileInventory
+from .agents_map import generate_agents_map, remove_managed_map
 
 
 def add_common_primitive_args(parser: argparse.ArgumentParser) -> None:
@@ -56,21 +62,19 @@ def add_common_primitive_args(parser: argparse.ArgumentParser) -> None:
 def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
-        prog="better-context",
-        description="AI Agent Codebase Intelligence CLI. Transforms unstructured codebases into structured context. Use these tools to explore, index, and understand codebases to generate AGENTS.md documentation.",
+        prog="better-context-unity",
+        description="Local Unity/C# codebase intelligence and safe hierarchical AGENTS.md maps.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  better-context scan --out manifest.json  Generate only the manifest
-  better-context stats                     Show codebase statistics
-  better-context graph -f mermaid          Export dependency graph
+  better-context-unity agents              Refresh Unity AGENTS.md maps
+  better-context-unity scan                Generate only the manifest
+  better-context-unity stats               Show codebase statistics
 
 Agent Workflow:
-  1. better-context scan       # Index the codebase
-  2. better-context overview   # Get project metadata
-  3. better-context tree       # Visualize file hierarchy
-  4. better-context stats      # Find important files
-  5. better-context focus      # Deep dive into specific files
+  1. better-context-unity agents     # Index and refresh project maps
+  2. better-context-unity overview   # Get Unity project metadata
+  3. better-context-unity focus      # Inspect a known C# file neighborhood
 """,
     )
 
@@ -122,7 +126,7 @@ Agent Workflow:
         "path",
         nargs="?",
         type=Path,
-        default=Path("."),
+        default=None,
         help="Path to scan",
     )
     scan_parser.add_argument(
@@ -131,6 +135,22 @@ Agent Workflow:
         type=Path,
         default=None,
         help="Manifest output path (default: .better-context/manifest.json)",
+    )
+
+    agents_parser = subparsers.add_parser(
+        "agents",
+        help="Index the project and safely refresh hierarchical AGENTS.md maps",
+    )
+    agents_parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=-1,
+        help="Maximum generated folder depth (-1 = unlimited)",
+    )
+    agents_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report maps that would change without writing them",
     )
 
     # --- overview command ---
@@ -327,7 +347,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Dispatch to command handlers
     command_handlers = {
         "scan": cmd_scan,
-        # "agents": cmd_agents, # Deprecated
+        "agents": cmd_agents,
         # "all": cmd_all,       # Deprecated
         "stats": cmd_stats,
         "graph": cmd_graph,
@@ -366,7 +386,7 @@ def load_manifest_or_fail(args: argparse.Namespace) -> Optional[Manifest]:
     manifest_path = get_manifest_path(args)
     if not manifest_path.exists():
         print(f"[error] Manifest not found at {manifest_path}")
-        print("[hint] Run 'better-context scan' first to generate the manifest")
+        print("[hint] Run 'better-context-unity scan' first to generate the manifest")
         return None
     try:
         return load_manifest(manifest_path)
@@ -377,7 +397,7 @@ def load_manifest_or_fail(args: argparse.Namespace) -> Optional[Manifest]:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan codebase and generate manifest."""
-    root = (args.path or args.root).resolve()
+    root = (args.path if args.path is not None else args.root).resolve()
     print(f"[scan] Scanning {root}...")
     
     try:
@@ -393,6 +413,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # Save manifest
         output_path = args.out if args.out else None
         manifest_path = orchestrator.save_manifest(result.manifest, output_path)
+        save_staleness_info(
+            root,
+            {entry.path: entry.content_hash for entry in result.inventory.files if not entry.path.endswith("AGENTS.md")},
+            result.manifest.meta.generated_at,
+            orchestrator.config.output_dir,
+        )
         
         print(f"[scan] Found {result.file_count} files")
         print(f"[scan] Detected {len(result.cycles)} cycles")
@@ -401,6 +427,49 @@ def cmd_scan(args: argparse.Namespace) -> int:
         
     except Exception as e:
         print(f"[error] Scan failed: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def cmd_agents(args: argparse.Namespace) -> int:
+    """Index a project and create marker-managed AGENTS.md maps."""
+    root = args.root.resolve()
+    print(f"[agents] Analyzing {root}...")
+    try:
+        orchestrator = Orchestrator(root)
+        analysis = orchestrator.analyze()
+        if not args.dry_run:
+            manifest_path = orchestrator.save_manifest(analysis.manifest)
+            print(f"[agents] Manifest saved to {manifest_path}")
+        result = generate_agents_map(
+            analysis.manifest,
+            analysis.graph,
+            root,
+            max_depth=args.max_depth,
+            dry_run=args.dry_run,
+        )
+        action = "would update" if args.dry_run else "updated"
+        print(f"[agents] {action} {len(result.files_written)} map(s); {len(result.unchanged)} unchanged")
+        for path in result.files_written:
+            print(f"  - {path}")
+        for error in result.errors:
+            print(f"[error] {error}")
+        if not args.dry_run and not result.errors:
+            save_staleness_info(
+                root,
+                {
+                    entry.path: entry.content_hash
+                    for entry in analysis.inventory.files
+                    if not entry.path.endswith("AGENTS.md")
+                },
+                analysis.manifest.meta.generated_at,
+                orchestrator.config.output_dir,
+            )
+        return 1 if result.errors else 0
+    except Exception as exc:
+        print(f"[error] AGENTS.md generation failed: {exc}")
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -567,10 +636,12 @@ def cmd_clean(args: argparse.Namespace) -> int:
             shutil.rmtree(bc_dir)
             removed.append(config.output_dir)
     
-    # Remove generated AGENTS.md files (unless cache-only)
+    # Remove only our managed block from AGENTS.md files (unless cache-only)
     if not args.cache_only:
         for agents_md in root.rglob('AGENTS.md'):
-            if is_generated_agents_md(agents_md):
+            if remove_managed_map(agents_md):
+                removed.append(str(agents_md.relative_to(root)))
+            elif is_generated_agents_md(agents_md):
                 agents_md.unlink()
                 removed.append(str(agents_md.relative_to(root)))
     
@@ -632,7 +703,7 @@ def cmd_focus(args: argparse.Namespace) -> int:
                 print(f"  - {s}")
         else:
             print(f"[error] File '{target_file}' not found in manifest.")
-            print(f"[hint] Run 'better-context scan' first to analyze the codebase.")
+            print("[hint] Run 'better-context-unity scan' first to analyze the codebase.")
         return 1
     
     print(f"[focus] Generating context for {target_file}...")
@@ -770,7 +841,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     info = load_staleness_info(root)
     if info is None:
         print("[verify] No staleness info found.")
-        print("[hint] Run 'better-context all' first to generate context with staleness tracking.")
+        print("[hint] Run 'better-context-unity agents' first to generate tracked context.")
         return 1
     
     try:
@@ -908,7 +979,11 @@ def cmd_deps(args: argparse.Namespace) -> int:
     else:
         # Fallback logic not implemented fully, just error for now as per test expectation?
         # Test expects "No dependency graph available"
-        print("Error: No dependency graph available. Run 'better-context scan' first.", file=sys.stderr)
+        print(
+            "Error: No dependency graph available. "
+            "Run 'better-context-unity scan' first.",
+            file=sys.stderr,
+        )
         return 1
         
     result = get_file_dependencies(args.path, graph)

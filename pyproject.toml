@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "better-context"
-version = "1.0.0"
-description = "AI Agent Codebase Intelligence CLI - Generate AGENTS.md hierarchies"
+name = "better-context-unity"
+version = "1.1.0"
+description = "Local Unity and C# codebase maps for coding agents"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -53,13 +53,10 @@ dev = [
 ]
 
 [project.scripts]
-better-context = "better_context.cli:main"
+better-context-unity = "better_context.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/better-context/better-context"
-Documentation = "https://github.com/better-context/better-context#readme"
-Repository = "https://github.com/better-context/better-context"
-Issues = "https://github.com/better-context/better-context/issues"
+Upstream = "https://github.com/hoangnb24/better-agents-md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/better_context"]

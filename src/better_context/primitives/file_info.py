@@ -76,9 +76,9 @@ def _get_file_info(path: str, project_root: Path | None = None) -> FileInfoResul
         base_dir = Path.cwd()
         
     try:
-        relative_path = str(file_path.relative_to(base_dir))
+        relative_path = file_path.relative_to(base_dir).as_posix()
     except ValueError:
-        relative_path = str(file_path)
+        relative_path = file_path.as_posix()
 
     try:
         source = file_path.read_text(encoding="utf-8")

@@ -129,8 +129,8 @@ def create_manifest_meta(root: Path, config_hash: str) -> ManifestMeta:
     return ManifestMeta(
         version=MANIFEST_VERSION,
         generated_at=datetime.now(timezone.utc).isoformat(),
-        generator=f"better-context/{MANIFEST_VERSION}",
-        root_path=str(root.resolve()),
+        generator=f"better-context-unity/{MANIFEST_VERSION}",
+        root_path=root.resolve().as_posix(),
         config_hash=config_hash,
     )
 

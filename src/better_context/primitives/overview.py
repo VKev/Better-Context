@@ -66,13 +66,32 @@ def analyze_overview(root: Path) -> OverviewResult:
     workspace_type = "single"
     source_dirs: List[str] = []
     test_dirs: List[str] = []
+
+    # Unity projects are identified from authored project files, never generated
+    # .csproj files. This check runs first so incidental Python/Node tooling does
+    # not replace the actual project type.
+    is_unity = (
+        (root / "Assets").is_dir()
+        and (root / "ProjectSettings" / "ProjectVersion.txt").is_file()
+    )
+    if is_unity:
+        primary_language = "csharp"
+        package_manager = "unity-package-manager"
+        package_file = "Packages/manifest.json"
+        frameworks.append("unity")
+        source_dirs.append("Assets")
+        if (root / "Packages").is_dir():
+            source_dirs.append("Packages")
+        for candidate in ("Assets/Tests", "Assets/Editor/Tests"):
+            if (root / candidate).is_dir():
+                test_dirs.append(candidate)
     
     # 1. Detect Python
     pyproject = root / "pyproject.toml"
     setup_py = root / "setup.py"
     requirements = root / "requirements.txt"
     
-    if pyproject.exists():
+    if pyproject.exists() and not primary_language:
         primary_language = "python"
         package_file = "pyproject.toml"
         try:
@@ -187,7 +206,7 @@ def analyze_overview(root: Path) -> OverviewResult:
     if not source_dirs:
         # Check for files in root
         has_code = any(
-            f.suffix in {'.py', '.js', '.ts', '.go', '.rs'} 
+            f.suffix in {'.py', '.js', '.ts', '.go', '.rs', '.cs'}
             for f in root.iterdir() 
             if f.is_file()
         )

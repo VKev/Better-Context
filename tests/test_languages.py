@@ -170,6 +170,7 @@ class TestSupportedLanguages:
         assert is_supported_language("typescript")
         assert is_supported_language("javascript")
         assert is_supported_language("go")
+        assert is_supported_language("csharp")
 
     def test_unsupported_languages(self):
         """Test that other languages are not (yet) supported."""
@@ -214,6 +215,7 @@ class TestExtensionQueries:
         assert ".ts" in exts
         assert ".js" in exts
         assert ".go" in exts
+        assert ".cs" in exts
         # Should NOT include unsupported languages
         assert ".rs" not in exts  # Rust not yet supported
         assert ".java" not in exts  # Java not yet supported

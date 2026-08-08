@@ -258,7 +258,7 @@ def walk_repository(
     
     for dirpath, dirnames, filenames in os.walk(root, followlinks=follow_symlinks):
         dir_path = Path(dirpath)
-        rel_dir = str(dir_path.relative_to(root))
+        rel_dir = dir_path.relative_to(root).as_posix()
         
         # Normalize "." to empty for root
         if rel_dir == '.':

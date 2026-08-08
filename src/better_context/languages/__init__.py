@@ -109,6 +109,7 @@ SUPPORTED_LANGUAGES: List[str] = [
     "typescript",
     "javascript",
     "go",
+    "csharp",
 ]
 
 # Shebang patterns for extensionless file detection
@@ -355,6 +356,11 @@ def _load_adapters() -> None:
     
     try:
         from . import go  # noqa: F401
+    except ImportError:
+        pass
+
+    try:
+        from . import csharp  # noqa: F401
     except ImportError:
         pass
 

@@ -731,7 +731,12 @@ def parse_file(
     Returns:
         ParseResult containing chunks, imports, exports, and errors
     """
-    # For now, always use regex (tree-sitter support to be added later)
+    if language == "csharp":
+        from .languages.csharp import CSharpAdapter
+
+        return CSharpAdapter().parse_file(path, source)
+
+    # Existing languages retain the upstream regex behavior.
     return chunk_file_regex(path, source, language)
 
 

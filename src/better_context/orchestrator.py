@@ -17,6 +17,7 @@ Pipeline Flow:
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +35,7 @@ from .manifest import (
     GraphData, ParseError, create_manifest_meta, save_manifest, load_manifest,
     MANIFEST_VERSION,
 )
-# from .generator import generate_agents_md, GeneratorConfig, GeneratorResult
+from .agents_map import generate_agents_map
 from .staleness import save_staleness_info
 
 
@@ -136,28 +137,26 @@ class Orchestrator:
         analysis = self.analyze()
         
         # Step 2: Generate (if requested)
-        generation = None # GeneratorResult()
-        # if generate:
-        #     generation = self.generate(
-        #         analysis.manifest,
-        #         analysis.graph,
-        #         max_depth=max_depth,
-        #         output_root=output_root,
-        #     )
-        #     
-        #     # Step 3: Save staleness info for verification
-        #     # Exclude AGENTS.md files since they are our output, not input
-        #     file_hashes = {
-        #         f.path: f.content_hash
-        #         for f in analysis.inventory.files
-        #         if not f.path.endswith("AGENTS.md")
-        #     }
-        #     save_staleness_info(
-        #         self.root,
-        #         file_hashes,
-        #         analysis.manifest.meta.generated_at,
-        #         self.config.output_dir,
-        #     )
+        generation = None
+        if generate and self.config.generate_agents_md:
+            generation = self.generate(
+                analysis.manifest,
+                analysis.graph,
+                max_depth=max_depth,
+                output_root=output_root,
+            )
+
+            file_hashes = {
+                f.path: f.content_hash
+                for f in analysis.inventory.files
+                if not f.path.endswith("AGENTS.md")
+            }
+            save_staleness_info(
+                self.root,
+                file_hashes,
+                analysis.manifest.meta.generated_at,
+                self.config.output_dir,
+            )
         
         total_time_ms = int((time.time() - start_time) * 1000)
         
@@ -224,10 +223,7 @@ class Orchestrator:
         max_depth: int = -1,
         output_root: Optional[Path] = None,
     ) -> Any:
-        """Generate AGENTS.md files from manifest.
-        
-        DEPRECATED: This method relies on deprecated generator.py logic.
-        Future versions will remove this as agents should generate their own context.
+        """Generate safe, marker-managed AGENTS.md maps from a manifest.
         
         Args:
             manifest: Analysis manifest
@@ -238,24 +234,12 @@ class Orchestrator:
         Returns:
             GeneratorResult with list of generated files
         """
-        # output_root = output_root or self.root
-        
-        # try:
-        #     from .generator import generate_agents_md, GeneratorConfig, GeneratorResult
-        #     
-        #     gen_config = GeneratorConfig(
-        #         max_depth=max_depth,
-        #         max_key_files=10,
-        #         include_metrics=True,
-        #         include_diagrams=True,
-        #     )
-        #     
-        #     return generate_agents_md(manifest, graph, output_root, gen_config)
-        # except ImportError:
-        #     # Handle case where generator is already removed
-        #     print("Warning: Generator module not found. AGENTS.md generation skipped.", file=sys.stderr)
-        #     return GeneratorResult()
-        return None
+        return generate_agents_map(
+            manifest,
+            graph,
+            output_root or self.root,
+            max_depth=max_depth,
+        )
     
     def save_manifest(self, manifest: Manifest, path: Optional[Path] = None) -> Path:
         """Save manifest to JSON file.
@@ -386,8 +370,41 @@ class Orchestrator:
             all_paths,
             self.root,
         )
+
+        self._add_csharp_reference_edges(graph, parsed_files, inventory)
         
         return resolution, graph
+
+    @staticmethod
+    def _add_csharp_reference_edges(
+        graph: DependencyGraph,
+        parsed_files: Dict[str, Any],
+        inventory: FileInventory,
+    ) -> None:
+        """Infer C# file edges from uniquely declared type names."""
+        owners: Dict[str, set[str]] = {}
+        for path, parsed in parsed_files.items():
+            if not path.endswith(".cs"):
+                continue
+            for chunk in parsed.chunks:
+                if chunk.type != "method":
+                    owners.setdefault(chunk.name, set()).add(path)
+
+        unique_owners = {name: next(iter(paths)) for name, paths in owners.items() if len(paths) == 1}
+        files = {entry.path: entry for entry in inventory.files}
+        for path, parsed in parsed_files.items():
+            if not path.endswith(".cs") or path not in files:
+                continue
+            try:
+                source = files[path].absolute_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            identifiers = set(re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", source))
+            declared_here = {chunk.name for chunk in parsed.chunks if chunk.type != "method"}
+            for name in identifiers - declared_here:
+                target = unique_owners.get(name)
+                if target and target != path:
+                    graph.add_edge(path, target)
     
     def _build_manifest(
         self,
