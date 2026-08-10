@@ -652,11 +652,21 @@ def _runtime_asset_preview(detail: Mapping[str, Any], limit: int) -> str:
     if isinstance(editor_asset, Mapping):
         facts = editor_asset.get("facts", {})
         if isinstance(facts, Mapping):
-            width = facts.get("source_width", facts.get("width"))
-            height = facts.get("source_height", facts.get("height"))
-            if width and height:
-                items.append(f"size: `{width}×{height}`")
-            if facts.get("pixels_per_unit"):
+            source_width = facts.get("source_width")
+            source_height = facts.get("source_height")
+            imported_width = facts.get("width")
+            imported_height = facts.get("height")
+            if source_width and source_height:
+                items.append(f"source: `{source_width}×{source_height}`")
+            elif imported_width and imported_height:
+                items.append(f"size: `{imported_width}×{imported_height}`")
+            if (
+                imported_width
+                and imported_height
+                and (imported_width, imported_height) != (source_width, source_height)
+            ):
+                items.append(f"imported: `{imported_width}×{imported_height}`")
+            if facts.get("pixels_per_unit") and facts.get("sprite_mode") not in {None, "None"}:
                 items.append(f"PPU: `{facts['pixels_per_unit']}`")
             if facts.get("mipmaps"):
                 items.append(f"mipmaps: `{facts['mipmaps']}`")
@@ -1031,7 +1041,8 @@ def _render_directory(
         and not _logical_unity_asset_path(entry.path)
     ]
     metadata_count = sum(
-        entry.path.endswith(".meta") and not _logical_unity_asset_path(entry.path)
+        entry.path.endswith(".meta")
+        and PurePosixPath(entry.path).name.casefold() != "agents.md.meta"
         for entry in direct_files
     )
     children = sorted(value for value in directories if value and _parent(value) == rel_dir)

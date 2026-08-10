@@ -2415,15 +2415,24 @@ def _responsibility(asset: dict[str, Any]) -> str:
         editor = asset.get("editor_asset", {})
         facts = editor.get("facts", {})
         subassets = editor.get("subassets", [])
-        dimensions = f"{facts.get('source_width', '?')}×{facts.get('source_height', '?')}"
+        source_dimensions = (
+            f"{facts.get('source_width', '?')}×{facts.get('source_height', '?')}"
+        )
+        imported_dimensions = f"{facts.get('width', '?')}×{facts.get('height', '?')}"
         if subassets:
             names = [str(item.get("name", "")) for item in subassets[:4]]
             suffix = "…" if len(subassets) > 4 else ""
             return (
-                f"Texture `{PurePosixPath(asset['path']).name}` ({dimensions}) importing "
+                f"Texture `{PurePosixPath(asset['path']).name}` source "
+                f"{source_dimensions}, importing "
                 f"{len(subassets)} Sprite subasset(s): {', '.join(names)}{suffix}."
             )
-        return f"Texture `{PurePosixPath(asset['path']).name}` imported at {dimensions}."
+        if imported_dimensions != source_dimensions and "?" not in imported_dimensions:
+            return (
+                f"Texture `{PurePosixPath(asset['path']).name}` source {source_dimensions}; "
+                f"current imported size {imported_dimensions}."
+            )
+        return f"Texture `{PurePosixPath(asset['path']).name}` source {source_dimensions}."
     if asset.get("kind") == "sprite_atlas":
         facts = asset.get("editor_asset", {}).get("facts", {})
         return (

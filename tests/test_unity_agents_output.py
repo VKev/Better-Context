@@ -58,6 +58,9 @@ def test_editor_asset_metrics_and_low_signal_art_collapse(tmp_path: Path) -> Non
                 "facts": {
                     "source_width": "512",
                     "source_height": "512",
+                    "width": "512",
+                    "height": "512",
+                    "sprite_mode": "Single",
                     "pixels_per_unit": "100",
                     "mipmaps": "false",
                     "platform.Android.overridden": "true",
@@ -80,9 +83,18 @@ def test_editor_asset_metrics_and_low_signal_art_collapse(tmp_path: Path) -> Non
             },
         },
     )
+    meta_entries = [
+        FileEntry(
+            path=f"{entry.path}.meta",
+            language="",
+            size_bytes=1,
+            hash=f"{entry.hash}.meta",
+        )
+        for entry in (target, pure)
+    ]
     manifest = Manifest(
         meta=ManifestMeta("1.3.0", "now", "better-context-unity/1.6.0", str(tmp_path), "x"),
-        files=[target, pure],
+        files=[target, pure, *meta_entries],
         graph=GraphData(nodes=[target.path, pure.path]),
         project={
             "unity_runtime": {
@@ -112,6 +124,7 @@ def test_editor_asset_metrics_and_low_signal_art_collapse(tmp_path: Path) -> Non
     assert "1 Sprite subassets" in root_map
     assert "Unity Editor snapshot: fresh via `batch`" in root_map
     assert "Android override: `max 1024`" in art_map
+    assert "2 `.meta` sidecar file(s) hidden" in art_map
     assert "Background.png" in art_map
     assert "Texture `Background.png` imported at 2048×1024" not in art_map
 
