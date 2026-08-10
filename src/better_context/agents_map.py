@@ -1028,7 +1028,7 @@ def _key_files(manifest: Manifest) -> list[str]:
         and entries[path].language
         and not path.endswith(".meta")
     ]
-    ranked.sort(key=lambda item: item[1], reverse=True)
+    ranked.sort(key=lambda item: (-item[1], item[0]))
     lines = [
         "",
         "### Key files (PageRank)",
@@ -1049,9 +1049,21 @@ def _key_files(manifest: Manifest) -> list[str]:
 def _architecture_summary(manifest: Manifest) -> list[str]:
     architecture = manifest.graph.architecture
     layers = architecture.get("layers", {})
-    violations = architecture.get("violations", [])
+    violations = sorted(
+        architecture.get("violations", []),
+        key=lambda item: (
+            str(item.get("source_path", "")),
+            str(item.get("target_path", "")),
+            str(item.get("source_layer", "")),
+            str(item.get("target_layer", "")),
+        ),
+    )
     lines = ["### Architecture layers (heuristic)", ""]
-    lines.append("- " + ", ".join(f"{name}: {len(paths)}" for name, paths in layers.items()) + ".")
+    lines.append(
+        "- "
+        + ", ".join(f"{name}: {len(layers[name])}" for name in sorted(layers))
+        + "."
+    )
     if violations:
         lines.extend(
             [
@@ -1074,7 +1086,10 @@ def _architecture_summary(manifest: Manifest) -> list[str]:
 
 def _cycle_summary(manifest: Manifest) -> list[str]:
     lines = ["### Circular dependencies", ""]
-    cycles = manifest.project.get("project_cycles", manifest.graph.cycles)
+    cycles = sorted(
+        (sorted(cycle) for cycle in manifest.project.get("project_cycles", manifest.graph.cycles)),
+        key=lambda cycle: tuple(cycle),
+    )
     if not cycles:
         return lines + ["No circular file dependency component was detected.", ""]
     for index, cycle in enumerate(cycles[:10], 1):
@@ -1373,11 +1388,18 @@ def _local_asset_references(rel_dir: str, manifest: Manifest) -> list[str]:
 
 
 def _local_violations(rel_dir: str, manifest: Manifest) -> list[str]:
-    violations = [
-        item
-        for item in manifest.graph.architecture.get("violations", [])
-        if _parent(item.get("source_path", "")) == rel_dir
-    ]
+    violations = sorted(
+        (
+            item
+            for item in manifest.graph.architecture.get("violations", [])
+            if _parent(item.get("source_path", "")) == rel_dir
+        ),
+        key=lambda item: (
+            str(item.get("source_path", "")),
+            str(item.get("target_path", "")),
+            str(item.get("message", "")),
+        ),
+    )
     if not violations:
         return []
     lines = ["### Layer violations affecting this folder", ""]

@@ -5,7 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from better_context.agents_map import BEGIN, generate_agents_map
+from better_context.agents_map import (
+    BEGIN,
+    _architecture_summary,
+    _cycle_summary,
+    _local_violations,
+    generate_agents_map,
+)
 from better_context.graph import build_graph_from_edges
 from better_context.manifest import FileEntry, GraphData, Manifest, ManifestMeta
 
@@ -464,3 +470,46 @@ def test_root_accepts_compact_runtime_asset_records(tmp_path: Path) -> None:
     assert "Assets/UI/Compact%20Button.prefab" in root_map
     assert "Compact Button → Game.UI.CompactButton.Submit()" in root_map
     assert "1 UnityEvent bindings" in root_map
+
+
+def test_architecture_and_cycle_rendering_is_order_independent() -> None:
+    violations = [
+        {
+            "source_path": "Assets/Z/B.cs",
+            "source_layer": "application",
+            "target_path": "Assets/Z/D.cs",
+            "target_layer": "presentation",
+            "message": "B to D",
+        },
+        {
+            "source_path": "Assets/Z/A.cs",
+            "source_layer": "application",
+            "target_path": "Assets/Z/C.cs",
+            "target_layer": "presentation",
+            "message": "A to C",
+        },
+    ]
+
+    def make_manifest(reverse: bool) -> Manifest:
+        ordered = list(reversed(violations)) if reverse else list(violations)
+        cycles = [["z.cs", "a.cs"], ["d.cs", "c.cs"]]
+        if reverse:
+            cycles = [list(reversed(cycle)) for cycle in reversed(cycles)]
+        return Manifest(
+            meta=ManifestMeta("1.2.0", "now", "test", ".", "hash"),
+            files=[],
+            graph=GraphData(
+                cycles=cycles,
+                architecture={
+                    "layers": {"presentation": ["c"], "application": ["a"]},
+                    "violations": ordered,
+                },
+            ),
+            project={"project_cycles": cycles},
+        )
+
+    first = make_manifest(False)
+    second = make_manifest(True)
+    assert _architecture_summary(first) == _architecture_summary(second)
+    assert _cycle_summary(first) == _cycle_summary(second)
+    assert _local_violations("Assets/Z", first) == _local_violations("Assets/Z", second)
