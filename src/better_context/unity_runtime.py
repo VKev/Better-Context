@@ -990,7 +990,11 @@ def _resolve_script(
             "unity_type": metadata.get("unity_type", ""),
             "chunk_id": getattr(chunk, "id", ""),
             "confidence": "exact",
-            "reason": result.get("reason", "meta_guid_and_roslyn_type"),
+            "reason": (
+                result["reason"]
+                if result["reason"] == "unique_concrete_roslyn_unity_type"
+                else "meta_guid_and_roslyn_type"
+            ),
         }
     )
     return result

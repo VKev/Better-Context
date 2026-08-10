@@ -244,6 +244,12 @@ MonoBehaviour:
     assert any(item["active"] is False for item in children)
     assert prefab["root_objects"][0]["name"] == "Root"
     assert prefab["script_types"] == ["Game.UI.Controller"]
+    resolved_script = next(
+        component["script"]
+        for component in prefab["root_objects"][0]["components"]
+        if component.get("script", {}).get("confidence") == "exact"
+    )
+    assert resolved_script["reason"] == "meta_guid_and_roslyn_type"
     assert len(prefab["event_bindings"]) == 1
     assert prefab["event_bindings"][0]["method"] == "OnPressed"
     assert prefab["event_bindings"][0]["owner_object"] == "Root"
