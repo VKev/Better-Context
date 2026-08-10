@@ -106,6 +106,10 @@ public sealed class Consumer : BaseConsumer
         "namespace UniRx; public static class Range { public static void Create() { } }\n",
         encoding="utf-8",
     )
+    (vendor / "SystemFragment.cs").write_text(
+        "namespace System; public static class SourceMarker { }\n",
+        encoding="utf-8",
+    )
     (root / "Assets" / "System.meta").write_text(
         "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", encoding="utf-8"
     )
@@ -133,6 +137,7 @@ def test_roslyn_filters_false_positives_and_extracts_public_surface(
     assert (consumer, "Assets/Scripts/BaseConsumer.cs") in edges
     assert not any(source.endswith(".cs") and target.endswith(".meta") for source, target in edges)
     assert (consumer, "Assets/Plugins/UniRx/Range.cs") not in edges
+    assert (consumer, "Assets/Plugins/UniRx/SystemFragment.cs") not in edges
 
     amount = next(entry for entry in result.manifest.files if entry.path.endswith("Amount.cs"))
     assert sum(chunk.type == "operator" for chunk in amount.chunks) == 2

@@ -376,6 +376,13 @@ internal static class Program
             if (symbol is null)
                 continue;
             symbol = NormalizeSymbol(symbol);
+            // A namespace can be assembled from declarations spread across many
+            // source files. Mapping its first source location to a file creates a
+            // false dependency (for example, `using UnityEngine` pointing at a
+            // project file that declares `namespace UnityEngine.AI`). File-level
+            // dependency edges must be backed by a concrete declared symbol.
+            if (symbol is INamespaceSymbol)
+                continue;
             var targetPath = SourcePath(symbol);
             if (targetPath is null || targetPath.Equals(sourcePath, StringComparison.OrdinalIgnoreCase))
                 continue;
