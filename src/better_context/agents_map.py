@@ -113,6 +113,15 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
             if not is_below_boundary and (max_depth < 0 or len(parent.parts) <= max_depth):
                 directories.add(parent.as_posix())
             parent = parent.parent
+    if unity:
+        for scene in manifest.project.get("scenes", []):
+            if scene.get("ownership") != "project-owned" or not scene.get("path"):
+                continue
+            parent = PurePosixPath(scene["path"]).parent
+            while str(parent) != ".":
+                if max_depth < 0 or len(parent.parts) <= max_depth:
+                    directories.add(parent.as_posix())
+                parent = parent.parent
     return directories
 
 

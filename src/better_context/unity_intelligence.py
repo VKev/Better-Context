@@ -6,6 +6,7 @@ import json
 import re
 from collections import Counter
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -225,9 +226,17 @@ def _build_scenes(root: Path) -> list[dict[str, Any]]:
 def _scenes(root: Path, paths: Iterable[str]) -> list[dict[str, Any]]:
     """List every scene asset and distinguish build scenes from samples/vendor scenes."""
     build = {item["path"]: item["enabled"] for item in _build_scenes(root)}
-    scene_paths = {path for path in paths if PurePosixPath(path).suffix.lower() == ".unity"} | set(
-        build
-    )
+    scene_paths = {
+        path for path in paths if PurePosixPath(path).suffix.lower() == ".unity"
+    } | set(build)
+    assets = root / "Assets"
+    if assets.is_dir():
+        with suppress(OSError):
+            scene_paths.update(
+                path.relative_to(root).as_posix()
+                for path in assets.rglob("*.unity")
+                if path.is_file()
+            )
     return [
         {
             "path": path,
