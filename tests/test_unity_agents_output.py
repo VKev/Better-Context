@@ -74,9 +74,7 @@ def _manifest(root: Path) -> tuple[Manifest, object]:
                         "path": "Game Root/Player",
                         "active": True,
                         "parent_file_id": "1",
-                        "components": [
-                            {"file_id": "4", "type": "MonoBehaviour", "script": player}
-                        ],
+                        "components": [{"file_id": "4", "type": "MonoBehaviour", "script": player}],
                     },
                 ],
                 "root_objects": ["1"],
@@ -356,9 +354,7 @@ def test_runtime_assets_render_semantic_maps_with_bounded_previews(tmp_path: Pat
     root_map = (root / "AGENTS.md").read_text(encoding="utf-8")
     prefab_map = (root / "Assets" / "Prefabs" / "AGENTS.md").read_text(encoding="utf-8")
     data_map = (root / "Assets" / "Data" / "AGENTS.md").read_text(encoding="utf-8")
-    animator_map = (root / "Assets" / "Animations" / "AGENTS.md").read_text(
-        encoding="utf-8"
-    )
+    animator_map = (root / "Assets" / "Animations" / "AGENTS.md").read_text(encoding="utf-8")
 
     assert "Keep this." in root_map and root_map.count(BEGIN) == 1
     assert "### Unity runtime intelligence" in root_map
@@ -388,9 +384,7 @@ def test_runtime_assets_render_semantic_maps_with_bounded_previews(tmp_path: Pat
     assert "parameters: `Speed`" in animator_map
 
     art_map = (root / "Assets" / "Art" / "AGENTS.md").read_text(encoding="utf-8")
-    vendor_map = (root / "Assets" / "Plugins" / "AGENTS.md").read_text(
-        encoding="utf-8"
-    )
+    vendor_map = (root / "Assets" / "Plugins" / "AGENTS.md").read_text(encoding="utf-8")
     assert "[`Decoration.prefab`](Decoration.prefab)" in art_map
     assert "[`Vendor/Vendor.prefab`](Vendor/Vendor.prefab)" in vendor_map
 
@@ -554,18 +548,12 @@ def test_art_assets_get_bounded_path_maps_without_invented_responsibility(
     assert not generated.errors
 
     drone_map = (root / "Assets" / "Drone" / "AGENTS.md").read_text(encoding="utf-8")
-    model_map = (root / "Assets" / "Drone" / "DroneV21" / "AGENTS.md").read_text(
+    model_map = (root / "Assets" / "Drone" / "DroneV21" / "AGENTS.md").read_text(encoding="utf-8")
+    animation_map = (root / "Assets" / "Drone" / "DroneV20" / "AGENTS.md").read_text(
         encoding="utf-8"
     )
-    animation_map = (
-        root / "Assets" / "Drone" / "DroneV20" / "AGENTS.md"
-    ).read_text(encoding="utf-8")
-    vendor_map = (
-        root / "Assets" / "GoogleMobileAds" / "AGENTS.md"
-    ).read_text(encoding="utf-8")
-    imported_map = (root / "Assets" / "Imported" / "Pack" / "AGENTS.md").read_text(
-        encoding="utf-8"
-    )
+    vendor_map = (root / "Assets" / "GoogleMobileAds" / "AGENTS.md").read_text(encoding="utf-8")
+    imported_map = (root / "Assets" / "Imported" / "Pack" / "AGENTS.md").read_text(encoding="utf-8")
 
     assert "[`DroneV21/`](DroneV21/AGENTS.md)" in drone_map
     assert "### Unity asset paths" in model_map
@@ -575,13 +563,81 @@ def test_art_assets_get_bounded_path_maps_without_invented_responsibility(
     assert "### Unity runtime assets" in animation_map
     assert "Animation clip `Run` sampled at 60 fps" in animation_map
     assert (
-        "[`Resources/GoogleMobileAdsSettings.asset`]"
-        "(Resources/GoogleMobileAdsSettings.asset)"
+        "[`Resources/GoogleMobileAdsSettings.asset`](Resources/GoogleMobileAdsSettings.asset)"
     ) in vendor_map
     assert "[`Models/Materials/Stone.mat`](Models/Materials/Stone.mat)" in imported_map
     assert not (root / "Assets" / "Imported" / "Pack" / "Models" / "AGENTS.md").exists()
     assert not (root / "Assets" / "GoogleMobileAds" / "Resources" / "AGENTS.md").exists()
     assert not (root / "Assets" / "Orphan" / "AGENTS.md").exists()
+
+
+def test_parsed_fbx_gets_bounded_model_intelligence(tmp_path: Path) -> None:
+    root = tmp_path / "UnityGame"
+    model_path = "Assets/Characters/Hero/Model/Hero.fbx"
+    target = root / Path(model_path)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"binary fixture")
+    (root / "ProjectSettings").mkdir()
+    (root / "ProjectSettings" / "ProjectVersion.txt").write_text(
+        "m_EditorVersion: 2022.3.62f2\n", encoding="utf-8"
+    )
+    detail = {
+        "path": model_path,
+        "kind": "model",
+        "status": "parsed",
+        "ownership": "project-owned",
+        "confidence": "exact",
+        "high_signal": 1,
+        "responsibility": (
+            "FBX model `Hero` with 8 node(s), 1 mesh(es), 5 bone(s), "
+            "and 1 Unity clip split(s); rig `humanoid`."
+        ),
+        "model": {
+            "format": "binary",
+            "fbx_version": 7400,
+            "node_count": 8,
+            "mesh_count": 1,
+            "skeleton": {"bone_count": 5},
+            "animation_stacks": [{"name": "Take 001"}],
+        },
+        "model_importer": {
+            "rig": {"animation_type": "humanoid"},
+            "clips": [{"name": "Take 001", "first_frame": 0, "last_frame": 60}],
+        },
+    }
+    entry = FileEntry(
+        path=model_path,
+        language="",
+        size_bytes=target.stat().st_size,
+        hash="model",
+        metadata={"ownership": "project-owned", "unity_runtime": detail},
+    )
+    manifest = Manifest(
+        meta=ManifestMeta("1.2.0", "now", "test", root.as_posix(), "hash"),
+        files=[entry],
+        graph=GraphData(nodes=[model_path]),
+        project={
+            "kind": "unity",
+            "unity_runtime": {
+                "scope": "project-owned",
+                "coverage": {"candidates": 1, "parsed": 1},
+                "metrics": {"assets": 1, "models": 1},
+            },
+        },
+    )
+
+    generated = generate_agents_map(manifest, build_graph_from_edges([], nodes=[model_path]), root)
+
+    assert not generated.errors
+    model_map = (root / "Assets" / "Characters" / "Hero" / "AGENTS.md").read_text(encoding="utf-8")
+    root_map = (root / "AGENTS.md").read_text(encoding="utf-8")
+    assert "### Unity runtime assets" in model_map
+    assert "FBX Model" in model_map
+    assert "8 node(s), 1 mesh(es), 5 bone(s)" in model_map
+    assert "takes: `Take 001`" in model_map
+    assert "rig: `humanoid`" in model_map
+    assert "1 FBX models" in root_map
+    assert not (root / "Assets" / "Characters" / "Hero" / "Model" / "AGENTS.md").exists()
 
 
 def test_architecture_and_cycle_rendering_is_order_independent() -> None:

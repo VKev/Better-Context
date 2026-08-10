@@ -279,7 +279,7 @@ MonoBehaviour:
     assert result.summary["metrics"]["scenes"] == 1
     assert all(not item["target"].endswith(".meta") for item in result.edge_details)
     assert not any(item["target"] == "Assets/Prefabs/Button.prefab" for item in result.edge_details)
-    assert result.summary["engine"] == "unity-yaml-stdlib"
+    assert result.summary["engine"] == "unity-yaml-fbx-stdlib"
     assert result.summary["metrics"]["event_bindings"] == 1
     assert result.summary["event_bindings"][0]["method"] == "OnPressed"
 

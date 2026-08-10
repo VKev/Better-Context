@@ -15,12 +15,14 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .fbx_runtime import inspect_fbx
 from .unity_intelligence import classify_ownership
 
 _ASSET_SUFFIXES = {
     ".anim",
     ".asset",
     ".controller",
+    ".fbx",
     ".mat",
     ".overridecontroller",
     ".prefab",
@@ -177,6 +179,14 @@ def _analyze_asset(
         "script_component_count": 0,
     }
     absolute = getattr(inventory_entry, "absolute_path", root / Path(path))
+    if PurePosixPath(path).suffix.lower() == ".fbx":
+        return _analyze_fbx_asset(
+            base,
+            Path(absolute),
+            root / Path(path + ".meta"),
+            guid_to_assets,
+            analysis,
+        )
     try:
         raw = Path(absolute).read_bytes()
     except OSError as error:
@@ -250,6 +260,35 @@ def _analyze_asset(
     ]
     base["event_bindings"] = base["unity_events"]
     base["confidence"] = _asset_confidence(base)
+    _emit_edges(base, analysis)
+    base["responsibility"] = _responsibility(base)
+    base["high_signal"] = _high_signal(base)
+    return base
+
+
+def _analyze_fbx_asset(
+    base: dict[str, Any],
+    absolute: Path,
+    meta_path: Path,
+    guid_to_assets: dict[str, list[str]],
+    analysis: UnityRuntimeAnalysis,
+) -> dict[str, Any]:
+    try:
+        inspected = inspect_fbx(absolute, meta_path, guid_to_assets)
+    except OSError as error:
+        return _failed_asset(
+            base,
+            analysis,
+            base["path"],
+            "read_error",
+            str(error),
+            "parse_error",
+        )
+    base.update(inspected)
+    if base.get("status") != "parsed":
+        base["responsibility"] = "FBX model; binary and ModelImporter data could not be inspected."
+        base["high_signal"] = 0
+        return base
     _emit_edges(base, analysis)
     base["responsibility"] = _responsibility(base)
     base["high_signal"] = _high_signal(base)
@@ -1563,6 +1602,7 @@ def _build_summary(
             "animation_clip": "animation_clips",
             "material": "materials",
             "mesh": "meshes",
+            "model": "models",
         }.get(kind, "other_assets")
         metrics[plural] += 1
         metrics["game_objects"] += asset.get("object_count", 0)
@@ -1607,6 +1647,12 @@ def _build_summary(
                 "animator_state_count": len(animator.get("states", [])),
                 "signal_score": asset.get("high_signal", 0),
                 "responsibility": asset.get("responsibility", ""),
+                "model_node_count": asset.get("model", {}).get("node_count", 0),
+                "model_mesh_count": asset.get("model", {}).get("mesh_count", 0),
+                "model_bone_count": asset.get("model", {}).get("skeleton", {}).get(
+                    "bone_count", 0
+                ),
+                "embedded_clip_count": len(asset.get("model_importer", {}).get("clips", [])),
             }
         )
     metrics["assets"] = len(assets)
@@ -1620,6 +1666,7 @@ def _build_summary(
         "animation_clips",
         "materials",
         "meshes",
+        "models",
         "other_assets",
         "game_objects",
         "components",
@@ -1645,7 +1692,7 @@ def _build_summary(
     ):
         coverage.setdefault(key, 0)
     return {
-        "engine": "unity-yaml-stdlib",
+        "engine": "unity-yaml-fbx-stdlib",
         "coverage": dict(coverage),
         "metrics": dict(metrics),
         "assets": sorted(compact_assets, key=lambda item: item["path"]),
@@ -1749,6 +1796,18 @@ def _responsibility(asset: dict[str, Any]) -> str:
             f"{mesh.get('vertex_count', 0)} vertices across "
             f"{mesh.get('submesh_count', 0)} submesh(es)."
         )
+    if asset.get("kind") == "model":
+        model = asset.get("model", {})
+        importer = asset.get("model_importer", {})
+        rig = importer.get("rig", {})
+        clips = importer.get("clips", [])
+        rig_name = rig.get("animation_type", "unknown")
+        return (
+            f"FBX model `{PurePosixPath(asset['path']).stem}` with "
+            f"{model.get('node_count', 0)} node(s), {model.get('mesh_count', 0)} mesh(es), "
+            f"{model.get('skeleton', {}).get('bone_count', 0)} bone(s), and "
+            f"{len(clips)} Unity clip split(s); rig `{rig_name}`."
+        )
     animator = asset.get("animator", {})
     if animator:
         return (
@@ -1776,7 +1835,7 @@ def _high_signal(asset: dict[str, Any]) -> int:
     animator = asset.get("animator", {})
     semantic_art = any(
         asset.get(key)
-        for key in ("animation_clip", "material", "mesh")
+        for key in ("animation_clip", "material", "mesh", "model")
     )
     return int(
         asset.get("script_component_count", 0) * 3
@@ -1798,6 +1857,7 @@ def _kind_for_path(path: str) -> str:
         ".overridecontroller": "override_controller",
         ".anim": "animation_clip",
         ".mat": "material",
+        ".fbx": "model",
     }.get(suffix, "asset")
 
 

@@ -1,3 +1,4 @@
+
 """
 File scanning and binary detection for better-context.
 
@@ -60,6 +61,7 @@ UNITY_STREAMED_ASSET_EXTENSIONS: frozenset[str] = frozenset(
     }
 )
 
+INDEXED_BINARY_EXTENSIONS: frozenset[str] = frozenset({".fbx"})
 
 @dataclass
 class FileInfo:
@@ -228,7 +230,8 @@ def compute_file_hash(path: Path, max_bytes: int = 65536) -> str:
     """
     Compute a content hash for a file.
     
-    Uses first 64KB for performance on large files.
+    Uses first 64KB by default. Pass a negative limit for a streaming full-file
+    hash when late-file changes must participate in staleness checks.
     
     Args:
         path: File path
@@ -238,9 +241,14 @@ def compute_file_hash(path: Path, max_bytes: int = 65536) -> str:
         First 16 characters of SHA-256 hash
     """
     try:
+        digest = hashlib.sha256()
         with open(path, 'rb') as f:
-            content = f.read(max_bytes)
-        return hashlib.sha256(content).hexdigest()[:16]
+            if max_bytes < 0:
+                while chunk := f.read(1024 * 1024):
+                    digest.update(chunk)
+            else:
+                digest.update(f.read(max_bytes))
+        return digest.hexdigest()[:16]
     except OSError:
         return '0' * 16
 
@@ -248,6 +256,7 @@ def compute_file_hash(path: Path, max_bytes: int = 65536) -> str:
 def walk_repository(
     root: Path,
     ignore_patterns: Optional[List[str]] = None,
+
     max_file_size_kb: int = DEFAULT_MAX_FILE_SIZE_KB,
     follow_symlinks: bool = False,
     language_detector: Optional[Callable[[Path], Optional[str]]] = None,
@@ -331,19 +340,17 @@ def walk_repository(
                 continue
             
             # Check file size
-            oversized_streamed_unity = (
-                stat.st_size > max_file_size_bytes and is_streamed_unity_asset(abs_path)
+            indexed_binary = abs_path.suffix.lower() in INDEXED_BINARY_EXTENSIONS
+            oversized_streamed_unity = stat.st_size > max_file_size_bytes and (
+                is_streamed_unity_asset(abs_path) or indexed_binary
             )
             if stat.st_size > max_file_size_bytes and not oversized_streamed_unity:
                 inventory.skipped_too_large.append(rel_path)
                 continue
             
             # Check binary
-            if is_binary_extension(abs_path):
-                inventory.skipped_binary.append(rel_path)
-                continue
-            
-            if not is_text_file(abs_path):
+            binary = is_binary_extension(abs_path) or not is_text_file(abs_path)
+            if binary and not indexed_binary:
                 inventory.skipped_binary.append(rel_path)
                 continue
             
@@ -356,7 +363,7 @@ def walk_repository(
                     pass
             
             # Compute hash
-            content_hash = compute_file_hash(abs_path)
+            content_hash = compute_file_hash(abs_path, -1 if indexed_binary else 65536)
             
             # Add to inventory
             inventory.files.append(FileInfo(
@@ -367,7 +374,7 @@ def walk_repository(
                 language=language,
                 content_hash=content_hash,
                 mtime=stat.st_mtime,
-                is_binary=False,
+                is_binary=binary,
             ))
     
     # Sort files for deterministic output

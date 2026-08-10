@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from better_context.cli import create_parser, main
+from better_context.cli import _trim_unity_depth, create_parser, main
 from better_context.config import Config
 from better_context.manifest import (
     FileEntry,
@@ -110,6 +110,36 @@ def test_unity_nested_commands_parse() -> None:
     )
     assert show_args.depth == -1
     assert binding_args.method == "SwitchGun"
+
+
+def test_unity_show_depth_trims_fbx_hierarchy() -> None:
+    runtime = {
+        "path": "Assets/Hero.fbx",
+        "model": {
+            "root_nodes": [
+                {
+                    "name": "Root",
+                    "children": [
+                        {
+                            "name": "Hips",
+                            "children": [
+                                {
+                                    "name": "Spine",
+                                    "children": [{"name": "Chest", "children": []}],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    trimmed = _trim_unity_depth(runtime, 2)
+
+    spine = trimmed["model"]["root_nodes"][0]["children"][0]["children"][0]
+    assert spine["name"] == "Spine"
+    assert spine["children"] == []
 
 
 def test_unity_list_filters_assets(

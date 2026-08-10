@@ -693,7 +693,7 @@ class Orchestrator:
         project["analysis_engine"] = self._analysis_engine
         if self._unity_runtime is not None:
             project["unity_runtime"] = self._unity_runtime.summary
-            project["unity_analysis_engine"] = "unity-yaml-structured-v1"
+            project["unity_analysis_engine"] = "unity-yaml-fbx-structured-v1"
         ownership_by_path = {
             entry.path: entry.metadata.get("ownership", "repository") for entry in analyzed_files
         }

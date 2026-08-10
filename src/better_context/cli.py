@@ -1,3 +1,4 @@
+
 """CLI entry point for better-context."""
 
 from __future__ import annotations
@@ -298,6 +299,7 @@ Agent Workflow:
         type=str,
         help="Target file to focus on (relative to project root)",
     )
+
     focus_parser.add_argument(
         "--depth",
         "-d",
@@ -599,6 +601,7 @@ def _compact_unity_asset(value: dict[str, Any], default_path: str = "") -> dict[
     return asset
 
 
+
 def _unity_assets(manifest: Manifest) -> list[dict[str, Any]]:
     """Read compact assets while accepting list and path-keyed manifest forms."""
     runtime = manifest.project.get("unity_runtime", {})
@@ -696,15 +699,28 @@ def _trim_unity_depth(runtime: dict[str, Any], depth: int) -> dict[str, Any]:
     """Limit object hierarchy output without modifying manifest data."""
     result = dict(runtime)
     objects = runtime.get("objects")
-    if depth < 0 or not isinstance(objects, list):
+    if depth < 0:
         return result
-    result["objects"] = [
-        _trim_unity_children(value, depth - _unity_object_depth(value))
-        if isinstance(value, dict)
-        else value
-        for value in objects
-        if not isinstance(value, dict) or _unity_object_depth(value) <= depth
-    ]
+    if isinstance(objects, list):
+        result["objects"] = [
+            _trim_unity_children(value, depth - _unity_object_depth(value))
+            if isinstance(value, dict)
+            else value
+            for value in objects
+            if not isinstance(value, dict) or _unity_object_depth(value) <= depth
+        ]
+    model = runtime.get("model")
+    if isinstance(model, dict):
+        trimmed_model = dict(model)
+        roots = model.get("root_nodes")
+        if isinstance(roots, list):
+            trimmed_model["root_nodes"] = [
+                _trim_unity_children(value, depth)
+                if isinstance(value, dict)
+                else value
+                for value in roots
+            ]
+        result["model"] = trimmed_model
     return result
 
 
@@ -751,12 +767,20 @@ def _format_unity_assets(assets: list[dict[str, Any]], fmt: str, total: int) -> 
     lines = [f"Unity runtime assets: showing {len(assets)} of {total}"]
     for asset in assets:
         scripts = _unity_cell(asset.get("script_types", []))
+        model_suffix = ""
+        if asset.get("kind") == "model":
+            model_suffix = (
+                f", model_nodes={asset.get('model_node_count', 0)}, "
+                f"meshes={asset.get('model_mesh_count', 0)}, "
+                f"bones={asset.get('model_bone_count', 0)}, "
+                f"clips={asset.get('embedded_clip_count', 0)}"
+            )
         lines.append(
             f"- {asset.get('path', '—')} [{asset.get('kind', 'unknown')}] "
             f"{asset.get('status', 'unknown')}; objects={asset.get('object_count', 0)}, "
             f"components={asset.get('component_count', 0)}, scripts={scripts}, "
             f"events={asset.get('event_count', 0)}, "
-            f"animator_states={asset.get('animator_state_count', 0)}"
+            f"animator_states={asset.get('animator_state_count', 0)}{model_suffix}"
         )
     return "\n".join(lines)
 
@@ -898,6 +922,7 @@ def cmd_unity(args: argparse.Namespace) -> int:
                 binding
                 for binding in bindings
                 if str(binding.get("asset", "")).replace("\\", "/").casefold()
+
                 == asset_path.casefold()
             ]
         if args.type:
@@ -1198,6 +1223,7 @@ def _export_call_graph(manifest: Manifest, fmt: str) -> str:
             callee = str(call.get("calleeId", "")).replace('"', '\\"')
             kind = call.get("kind", "call")
             lines.append(f'  "{caller}" -> "{callee}" [label="{kind}"];')
+
         lines.append("}")
         return "\n".join(lines)
     node_ids = {node: f"c{index}" for index, node in enumerate(nodes)}
@@ -1498,6 +1524,7 @@ def cmd_tree(args: argparse.Namespace) -> int:
     result = analyze_tree(root, max_depth=args.depth)
         
     if args.format == "human":
+
         print(format_tree_human(result))
     elif args.format == "markdown":
         print(format_tree_markdown(result))

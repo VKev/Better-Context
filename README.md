@@ -141,14 +141,14 @@ The root map contains:
 Folder maps add verified structural responsibility, key public API with semantic
 anchors, named dependencies and dependents, Ca/Ce/I/A/D coupling metrics,
 function calls, and exact Unity serialized references. `.meta` sidecars are
-hidden from file tables and can never be C# dependency targets. Raw models,
-textures, audio, video, and low-signal serialized assets receive path-only
-navigation without an invented code-like responsibility. Those art maps stop at
-`Assets/<group>/<child>`; deeper paths are folded into the nearest map and each
-table is capped at 24 rows. Parsed animation, material, and mesh facts may be
-shown in that nearest map, while vendor/generated trees still stop at a clearly
-labeled boundary. Regeneration safely removes only stale managed blocks below
-collapsed boundaries.
+hidden from file tables and can never be C# dependency targets. Parsed FBX,
+animation, material, and mesh facts may be shown in the nearest bounded art map.
+Textures, audio, video, unsupported models, and other low-signal assets receive
+path-only navigation without an invented code-like responsibility. Art maps stop
+at `Assets/<group>/<child>`; deeper paths are folded into the nearest map and
+each table is capped. Vendor/generated trees still stop at a clearly labeled
+boundary. Regeneration safely removes only stale managed blocks below collapsed
+boundaries.
 
 Unity runtime asset summaries stay deliberately compact in `AGENTS.md`. The
 full object/component topology remains in `.better-context/manifest.json` and
@@ -157,6 +157,7 @@ can be queried without regenerating context:
 ```powershell
 better-context-unity --root D:\Path\To\UnityProject unity list --kind prefab --format human
 better-context-unity --root D:\Path\To\UnityProject unity show Assets/UI/Shop.prefab --depth 3
+better-context-unity --root D:\Path\To\UnityProject unity show Assets/Characters/Hero.fbx --depth 2
 better-context-unity --root D:\Path\To\UnityProject unity bindings --type ShopView --method Buy
 ```
 
@@ -164,6 +165,22 @@ better-context-unity --root D:\Path\To\UnityProject unity bindings --type ShopVi
 use `--depth -1` for the full hierarchy. Binding filters use exact,
 case-insensitive asset/type/method matching. These read-only commands require a
 fresh manifest and print an `agents` refresh hint when it is missing or stale.
+
+### FBX model intelligence
+
+FBX support is zero-dependency and covers binary FBX 7.x plus structural ASCII
+FBX. The analyzer reports scene-node hierarchy, mesh control-point and polygon
+counts, material/texture names, skeleton bones, and animation stacks/layers/
+curve counts. The adjacent Unity `ModelImporter` `.fbx.meta` file supplies the
+Unity-authoritative rig/avatar mode, humanoid mapping, imported skeleton,
+animation clip splits/events, mesh/material settings, and copied-avatar GUID.
+Those GUIDs become verified dependency edges; free-text names never do.
+
+The structural parser does not evaluate animated transforms, decode curve
+samples for playback, bake avatars, or replace Unity import validation. Use the
+Unity Editor when those runtime/import results are required. The extracted
+shape follows Unity's documented [`ModelImporter`](https://docs.unity3d.com/ScriptReference/ModelImporter.html)
+surface and Autodesk's documented [FBX scene graph](https://help.autodesk.com/cloudhelp/2018/ENU/FBX-Developer-Help/nodes_and_scene_graph/fbx_scenes.html).
 
 ## Commands
 
@@ -175,8 +192,8 @@ fresh manifest and print an `agents` refresh hint when it is missing or stale.
 | `tree` | Show a compact directory summary |
 | `file <path>` | Extract types, methods, imports, and exports |
 | `deps <path>` | Show named dependencies/dependents with resolved symbols and lines |
-| `unity list` | List analyzed scenes, prefabs, ScriptableObjects, Animator assets, clips, materials, and meshes |
-| `unity show <path>` | Show full GameObject/component/runtime data for one Unity asset |
+| `unity list` | List analyzed scenes, prefabs, ScriptableObjects, Animator assets, clips, materials, meshes, and FBX models |
+| `unity show <path>` | Show full GameObject/component/model/runtime data for one Unity asset |
 | `unity bindings` | Query persistent UnityEvent bindings by asset, target type, or method |
 | `stats` | Show manifest and PageRank statistics |
 | `focus <path>` | Build context around a known file |

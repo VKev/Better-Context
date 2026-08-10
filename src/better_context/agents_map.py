@@ -24,6 +24,7 @@ UNITY_RUNTIME_SUFFIXES = {
     ".anim",
     ".asset",
     ".controller",
+    ".fbx",
     ".mat",
     ".overridecontroller",
     ".prefab",
@@ -154,7 +155,10 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
         runtime_kind = str(_unity_runtime(entry).get("kind", ""))
         bounded_art_signal = asset_path and (
             not semantic_signal
-            or (not source_signal and runtime_kind in {"animation_clip", "material", "mesh"})
+            or (
+                not source_signal
+                and runtime_kind in {"animation_clip", "material", "mesh", "model"}
+            )
         )
         if bounded_art_signal:
             depth_limit = (
@@ -168,9 +172,7 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
                 and parent.as_posix() != boundary
                 and parent.as_posix().startswith(boundary + "/")
             )
-            if not is_below_boundary and (
-                depth_limit < 0 or len(parent.parts) <= depth_limit
-            ):
+            if not is_below_boundary and (depth_limit < 0 or len(parent.parts) <= depth_limit):
                 directories.add(parent.as_posix())
             parent = parent.parent
     if unity:
@@ -349,6 +351,8 @@ def _detail_has_unity_runtime_signal(
         return True
     if kind == "mesh" and isinstance(detail.get("mesh"), Mapping):
         return True
+    if kind == "model" and isinstance(detail.get("model"), Mapping):
+        return True
     animator = _runtime_animator(detail)
     if kind in {"animator_controller", "override_controller"} and any(
         _runtime_list(animator.get(key)) for key in ("layers", "states", "blend_trees")
@@ -418,6 +422,7 @@ def _runtime_kind_label(detail: Mapping[str, Any]) -> str:
         "animation_clip": "Animation Clip",
         "material": "Material",
         "mesh": "Mesh",
+        "model": "FBX Model",
     }
     kind = str(detail.get("kind", "asset"))
     return labels.get(kind, kind.replace("_", " ").title())
@@ -453,8 +458,7 @@ def _runtime_responsibility(entry: FileEntry, detail: Mapping[str, Any]) -> str:
         state_count = len(_runtime_list(animator.get("states")))
         layer_count = len(_runtime_list(animator.get("layers")))
         lead = (
-            f"Animator controller `{name}` defining {layer_count} layer(s), "
-            f"{state_count} state(s)"
+            f"Animator controller `{name}` defining {layer_count} layer(s), {state_count} state(s)"
         )
     elif kind == "animation_clip":
         clip = detail.get("animation_clip", {})
@@ -475,6 +479,19 @@ def _runtime_responsibility(entry: FileEntry, detail: Mapping[str, Any]) -> str:
         vertices = mesh.get("vertex_count", 0) if isinstance(mesh, Mapping) else 0
         submeshes = mesh.get("submesh_count", 0) if isinstance(mesh, Mapping) else 0
         lead = f"Mesh `{name}` containing {vertices} vertices across {submeshes} submesh(es)"
+    elif kind == "model":
+        model = detail.get("model", {})
+        importer = detail.get("model_importer", {})
+        node_count = model.get("node_count", 0) if isinstance(model, Mapping) else 0
+        mesh_count = model.get("mesh_count", 0) if isinstance(model, Mapping) else 0
+        skeleton = model.get("skeleton", {}) if isinstance(model, Mapping) else {}
+        bone_count = skeleton.get("bone_count", 0) if isinstance(skeleton, Mapping) else 0
+        clips = importer.get("clips", []) if isinstance(importer, Mapping) else []
+        lead = (
+            f"FBX model `{name}` defining {node_count} node(s), {mesh_count} mesh(es), "
+            f"{bone_count} bone(s), and {len(clips) if isinstance(clips, list) else 0} "
+            "Unity clip split(s)"
+        )
     else:
         lead = f"Serialized Unity runtime asset `{name}`"
     return lead + ("; " + "; ".join(clauses) if clauses else "") + "."
@@ -565,6 +582,30 @@ def _runtime_asset_preview(detail: Mapping[str, Any], limit: int) -> str:
             f"geometry: `{mesh.get('vertex_count', 0)} vertices`, "
             f"`{mesh.get('submesh_count', 0)} submeshes`"
         )
+    model = detail.get("model")
+    if isinstance(model, Mapping):
+        items.append(
+            f"FBX: `{model.get('format', 'unknown')} {model.get('fbx_version', 0)}`, "
+            f"`{model.get('node_count', 0)} nodes`, `{model.get('mesh_count', 0)} meshes`"
+        )
+        skeleton = model.get("skeleton", {})
+        if isinstance(skeleton, Mapping) and skeleton.get("bone_count"):
+            items.append(f"skeleton: `{skeleton['bone_count']} bones`")
+        stacks = _runtime_list(model.get("animation_stacks"))
+        if stacks:
+            items.append(
+                "takes: " + ", ".join(f"`{value.get('name', '')}`" for value in stacks[:2])
+            )
+    importer = detail.get("model_importer")
+    if isinstance(importer, Mapping):
+        rig = importer.get("rig", {})
+        if isinstance(rig, Mapping) and rig.get("animation_type"):
+            items.append(f"rig: `{rig['animation_type']}`")
+        clips = _runtime_list(importer.get("clips"))
+        if clips:
+            items.append(
+                "Unity clips: " + ", ".join(f"`{value.get('name', '')}`" for value in clips[:2])
+            )
 
     sources = [
         ("events", events),
@@ -773,6 +814,7 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
                 f"{metrics.get('animation_clips', 0)} animation clips",
                 f"{metrics.get('materials', 0)} materials",
                 f"{metrics.get('meshes', 0)} meshes",
+                f"{metrics.get('models', 0)} FBX models",
                 f"{metrics.get('game_objects', 0)} GameObjects",
                 f"{metrics.get('components', 0)} components",
                 f"{metrics.get('script_components', 0)} project-script usages",
@@ -797,9 +839,7 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
         for entry, detail in _runtime_asset_entries(manifest)
         if _detail_has_unity_runtime_signal(entry, detail, manifest)
     ]
-    ranked.sort(
-        key=lambda item: (-_runtime_asset_score(item[0], item[1], manifest), item[0].path)
-    )
+    ranked.sort(key=lambda item: (-_runtime_asset_score(item[0], item[1], manifest), item[0].path))
     if ranked:
         lines.extend(
             [
@@ -1099,11 +1139,7 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
         if scripts:
             purpose += "; verified project scripts include " + ", ".join(scripts[:5])
         return purpose + "."
-    asset_paths = {
-        logical
-        for entry in files
-        if (logical := _logical_unity_asset_path(entry.path))
-    }
+    asset_paths = {logical for entry in files if (logical := _logical_unity_asset_path(entry.path))}
     if asset_paths:
         return (
             f"Path-only navigation for {len(asset_paths)} Unity art/media asset(s); "
@@ -1216,13 +1252,13 @@ def _root_intelligence(manifest: Manifest) -> list[str]:
             "",
             "- Deep neighborhood: `better-context-unity focus <relative-file> --depth 3`.",
             '- Token budget: `better-context-unity optimize --budget 8000 --task "<task>"`.',
-                "- Semantic anchors shown beside public APIs remain stable across file "
-                "moves when logic is unchanged.",
-                "- Pure art, vendor, and runtime assets without semantic signal are collapsed; "
-                "use the `unity` commands above for complete object-level evidence.",
-                "",
-            ]
-        )
+            "- Semantic anchors shown beside public APIs remain stable across file "
+            "moves when logic is unchanged.",
+            "- Pure art, vendor, and runtime assets without semantic signal are collapsed; "
+            "use the `unity` commands above for complete object-level evidence.",
+            "",
+        ]
+    )
     return lines
 
 
@@ -1303,11 +1339,7 @@ def _architecture_summary(manifest: Manifest) -> list[str]:
         ),
     )
     lines = ["### Architecture layers (heuristic)", ""]
-    lines.append(
-        "- "
-        + ", ".join(f"{name}: {len(layers[name])}" for name in sorted(layers))
-        + "."
-    )
+    lines.append("- " + ", ".join(f"{name}: {len(layers[name])}" for name in sorted(layers)) + ".")
     if violations:
         lines.extend(
             [
