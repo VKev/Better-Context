@@ -14,7 +14,8 @@ then adds the pieces a Unity coding agent needs:
   not create C# file edges.
 - Unity YAML runtime intelligence for scene/prefab GameObject hierarchies,
   built-in and script components, ScriptableObject instances, persistent
-  UnityEvents, prefab instances, and Animator controllers.
+  UnityEvents, prefab instances, Animator controllers, animation clips,
+  materials, and serialized mesh assets.
 - Exact scene, prefab, ScriptableObject, controller, material, animation, and
   script relationships resolved through structured object references and Unity
   GUIDs. Roslyn confirms all C# types and callable UnityEvent targets.
@@ -140,10 +141,14 @@ The root map contains:
 Folder maps add verified structural responsibility, key public API with semantic
 anchors, named dependencies and dependents, Ca/Ce/I/A/D coupling metrics,
 function calls, and exact Unity serialized references. `.meta` sidecars are
-counted but hidden from file tables and can never be C# dependency targets.
-Low-signal media-only directories are not given their own maps, while vendor
-and generated trees stop at a clearly labeled boundary map. Regeneration safely
-removes only stale managed blocks left below those collapsed boundaries.
+hidden from file tables and can never be C# dependency targets. Raw models,
+textures, audio, video, and low-signal serialized assets receive path-only
+navigation without an invented code-like responsibility. Those art maps stop at
+`Assets/<group>/<child>`; deeper paths are folded into the nearest map and each
+table is capped at 24 rows. Parsed animation, material, and mesh facts may be
+shown in that nearest map, while vendor/generated trees still stop at a clearly
+labeled boundary. Regeneration safely removes only stale managed blocks below
+collapsed boundaries.
 
 Unity runtime asset summaries stay deliberately compact in `AGENTS.md`. The
 full object/component topology remains in `.better-context/manifest.json` and
@@ -170,7 +175,7 @@ fresh manifest and print an `agents` refresh hint when it is missing or stale.
 | `tree` | Show a compact directory summary |
 | `file <path>` | Extract types, methods, imports, and exports |
 | `deps <path>` | Show named dependencies/dependents with resolved symbols and lines |
-| `unity list` | List analyzed scene, prefab, ScriptableObject, and Animator assets |
+| `unity list` | List analyzed scenes, prefabs, ScriptableObjects, Animator assets, clips, materials, and meshes |
 | `unity show <path>` | Show full GameObject/component/runtime data for one Unity asset |
 | `unity bindings` | Query persistent UnityEvent bindings by asset, target type, or method |
 | `stats` | Show manifest and PageRank statistics |

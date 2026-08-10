@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from collections import Counter
 from collections.abc import Mapping
@@ -19,12 +20,40 @@ BEGIN = "<!-- better-context-unity:begin -->"
 END = "<!-- better-context-unity:end -->"
 MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTALL)
 UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
-UNITY_RUNTIME_SUFFIXES = {".asset", ".controller", ".overridecontroller", ".prefab", ".unity"}
+UNITY_RUNTIME_SUFFIXES = {
+    ".anim",
+    ".asset",
+    ".controller",
+    ".mat",
+    ".overridecontroller",
+    ".prefab",
+    ".unity",
+}
+UNITY_ASSET_PATH_SUFFIXES = UNITY_RUNTIME_SUFFIXES | {
+    ".3ds",
+    ".blend",
+    ".dae",
+    ".exr",
+    ".fbx",
+    ".hdr",
+    ".jpeg",
+    ".jpg",
+    ".mp3",
+    ".mp4",
+    ".obj",
+    ".ogg",
+    ".png",
+    ".psd",
+    ".tga",
+    ".wav",
+}
 SUMMARY_FILE = ".ctx-summaries.json"
 MAX_SUMMARY_LENGTH = 240
 DEFAULT_UNITY_ASSET_LIMIT = 12
 DEFAULT_UNITY_OBJECT_LIMIT = 8
+DEFAULT_UNITY_PATH_LIMIT = 24
 ROOT_UNITY_ASSET_LIMIT = 8
+UNITY_ART_MAP_MAX_DEPTH = 3
 UNITY_LIFECYCLE_METHODS = {
     "Awake",
     "OnEnable",
@@ -99,25 +128,49 @@ def _is_unity_project(root: Path) -> bool:
 
 def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set[str]:
     directories = {""}
+    known_paths = {entry.path for entry in manifest.files}
     for entry in manifest.files:
         path = PurePosixPath(entry.path)
         if path.name == "AGENTS.md" or not path.parts:
             continue
         if unity and path.parts[0] not in UNITY_ROOTS:
             continue
-        if unity and not (
-            _is_map_signal_file(path) or _has_unity_runtime_signal(entry, manifest)
+        source_signal = unity and _is_map_signal_file(path)
+        runtime_signal = unity and _has_unity_runtime_signal(entry, manifest)
+        semantic_signal = source_signal or runtime_signal
+        asset_path = _logical_unity_asset_path(entry.path) if unity else ""
+        if (
+            asset_path
+            and entry.path.endswith(".meta")
+            and asset_path not in known_paths
+            and not (Path(manifest.meta.root_path) / Path(asset_path)).is_file()
         ):
+            asset_path = ""
+        if unity and not semantic_signal and not asset_path:
             continue
         boundary = _map_boundary(path.parent) if unity else None
-        parent = path.parent
+        parent = PurePosixPath(asset_path).parent if asset_path else path.parent
+        depth_limit = max_depth
+        runtime_kind = str(_unity_runtime(entry).get("kind", ""))
+        bounded_art_signal = asset_path and (
+            not semantic_signal
+            or (not source_signal and runtime_kind in {"animation_clip", "material", "mesh"})
+        )
+        if bounded_art_signal:
+            depth_limit = (
+                UNITY_ART_MAP_MAX_DEPTH
+                if max_depth < 0
+                else min(max_depth, UNITY_ART_MAP_MAX_DEPTH)
+            )
         while str(parent) != ".":
             is_below_boundary = bool(
                 boundary
                 and parent.as_posix() != boundary
                 and parent.as_posix().startswith(boundary + "/")
             )
-            if not is_below_boundary and (max_depth < 0 or len(parent.parts) <= max_depth):
+            if not is_below_boundary and (
+                depth_limit < 0 or len(parent.parts) <= depth_limit
+            ):
                 directories.add(parent.as_posix())
             parent = parent.parent
     if unity:
@@ -147,6 +200,13 @@ def _is_map_signal_file(path: PurePosixPath) -> bool:
         ".uxml",
         ".uss",
     }
+
+
+def _logical_unity_asset_path(path: str) -> str:
+    candidate = path[:-5] if path.lower().endswith(".meta") else path
+    if PurePosixPath(candidate).suffix.lower() in UNITY_ASSET_PATH_SUFFIXES:
+        return candidate
+    return ""
 
 
 def _unity_runtime(entry: FileEntry) -> Mapping[str, Any]:
@@ -283,6 +343,12 @@ def _detail_has_unity_runtime_signal(
         pass
     if kind in {"script", "scriptable_object"} and _runtime_script(detail):
         return True
+    if kind == "animation_clip" and isinstance(detail.get("animation_clip"), Mapping):
+        return True
+    if kind == "material" and isinstance(detail.get("material"), Mapping):
+        return True
+    if kind == "mesh" and isinstance(detail.get("mesh"), Mapping):
+        return True
     animator = _runtime_animator(detail)
     if kind in {"animator_controller", "override_controller"} and any(
         _runtime_list(animator.get(key)) for key in ("layers", "states", "blend_trees")
@@ -349,6 +415,9 @@ def _runtime_kind_label(detail: Mapping[str, Any]) -> str:
         "scriptable_object": "ScriptableObject",
         "animator_controller": "Animator Controller",
         "override_controller": "Animator Override Controller",
+        "animation_clip": "Animation Clip",
+        "material": "Material",
+        "mesh": "Mesh",
     }
     kind = str(detail.get("kind", "asset"))
     return labels.get(kind, kind.replace("_", " ").title())
@@ -387,6 +456,25 @@ def _runtime_responsibility(entry: FileEntry, detail: Mapping[str, Any]) -> str:
             f"Animator controller `{name}` defining {layer_count} layer(s), "
             f"{state_count} state(s)"
         )
+    elif kind == "animation_clip":
+        clip = detail.get("animation_clip", {})
+        rate = clip.get("sample_rate") if isinstance(clip, Mapping) else None
+        curve_count = clip.get("curve_count", 0) if isinstance(clip, Mapping) else 0
+        lead = f"Animation clip `{name}`"
+        if rate is not None:
+            lead += f" sampled at {rate} fps"
+        lead += f" with {curve_count} serialized curve(s)"
+    elif kind == "material":
+        material = detail.get("material", {})
+        shader = material.get("shader") if isinstance(material, Mapping) else ""
+        lead = f"Material `{name}`"
+        if shader:
+            lead += f" using `{shader}`"
+    elif kind == "mesh":
+        mesh = detail.get("mesh", {})
+        vertices = mesh.get("vertex_count", 0) if isinstance(mesh, Mapping) else 0
+        submeshes = mesh.get("submesh_count", 0) if isinstance(mesh, Mapping) else 0
+        lead = f"Mesh `{name}` containing {vertices} vertices across {submeshes} submesh(es)"
     else:
         lead = f"Serialized Unity runtime asset `{name}`"
     return lead + ("; " + "; ".join(clauses) if clauses else "") + "."
@@ -454,6 +542,30 @@ def _runtime_asset_preview(detail: Mapping[str, Any], limit: int) -> str:
         if item.get("target")
     ]
 
+    clip = detail.get("animation_clip")
+    if isinstance(clip, Mapping):
+        if clip.get("sample_rate") is not None:
+            items.append(f"sample rate: `{clip['sample_rate']} fps`")
+        if clip.get("curve_count"):
+            items.append(f"curves: `{clip['curve_count']}`")
+        event_names = [str(value) for value in clip.get("events", []) if value]
+        if event_names:
+            items.append("animation events: " + ", ".join(f"`{v}`" for v in event_names[:2]))
+    material = detail.get("material")
+    if isinstance(material, Mapping):
+        if material.get("shader"):
+            items.append(f"shader: `{material['shader']}`")
+        textures = [str(value) for value in material.get("textures", []) if value]
+        if textures:
+            items.append("textures: " + ", ".join(f"`{v}`" for v in textures[:2]))
+        references = []
+    mesh = detail.get("mesh")
+    if isinstance(mesh, Mapping):
+        items.append(
+            f"geometry: `{mesh.get('vertex_count', 0)} vertices`, "
+            f"`{mesh.get('submesh_count', 0)} submeshes`"
+        )
+
     sources = [
         ("events", events),
         ("scripts", scripts),
@@ -495,6 +607,7 @@ def _markdown_path(path: str) -> str:
 def _unity_runtime_assets_section(
     entries: list[FileEntry],
     manifest: Manifest,
+    rel_dir: str,
 ) -> list[str]:
     asset_limit, object_limit = _unity_output_limits(manifest)
     ranked = sorted(
@@ -512,8 +625,8 @@ def _unity_runtime_assets_section(
     ]
     for entry in ranked[:asset_limit]:
         detail = _unity_runtime(entry)
-        filename = PurePosixPath(entry.path).name
-        destination = quote(filename, safe="._-~")
+        filename = posixpath.relpath(entry.path, rel_dir or ".")
+        destination = _markdown_path(filename)
         lines.append(
             f"| [`{_cell(filename)}`]({destination}) | {_cell(_runtime_kind_label(detail))} | "
             f"{_cell(_runtime_responsibility(entry, detail))} | "
@@ -536,6 +649,110 @@ def _unity_runtime_assets_section(
     return lines
 
 
+def _asset_path_owner(asset_path: str, directories: set[str]) -> str:
+    parent = _parent(asset_path)
+    candidates = [
+        directory
+        for directory in directories
+        if not directory or parent == directory or parent.startswith(directory + "/")
+    ]
+    return max(candidates, key=lambda value: (len(PurePosixPath(value).parts), value))
+
+
+def _unity_runtime_entries_for_map(
+    rel_dir: str,
+    directories: set[str],
+    manifest: Manifest,
+) -> list[FileEntry]:
+    return [
+        entry
+        for entry in manifest.files
+        if _has_unity_runtime_signal(entry, manifest)
+        and _asset_path_owner(entry.path, directories) == rel_dir
+    ]
+
+
+def _unity_asset_path_records(
+    rel_dir: str,
+    directories: set[str],
+    manifest: Manifest,
+) -> list[tuple[str, str, str]]:
+    entries_by_path = {entry.path: entry for entry in manifest.files}
+    logical_paths: dict[str, FileEntry] = {}
+    for entry in manifest.files:
+        logical = _logical_unity_asset_path(entry.path)
+        if not logical:
+            continue
+        if (
+            entry.path.endswith(".meta")
+            and logical not in entries_by_path
+            and not (Path(manifest.meta.root_path) / Path(logical)).is_file()
+        ):
+            continue
+        current = logical_paths.get(logical)
+        if current is None or (current.path.endswith(".meta") and not entry.path.endswith(".meta")):
+            logical_paths[logical] = entry
+
+    records: list[tuple[str, str, str]] = []
+    kind_labels = {
+        ".anim": "Animation clip",
+        ".asset": "Serialized asset",
+        ".controller": "Animator controller",
+        ".mat": "Material",
+        ".overridecontroller": "Animator override controller",
+        ".prefab": "Prefab",
+        ".unity": "Scene",
+        ".fbx": "Model",
+        ".obj": "Model",
+        ".blend": "Model",
+        ".dae": "Model",
+        ".3ds": "Model",
+        ".png": "Texture",
+        ".jpg": "Texture",
+        ".jpeg": "Texture",
+        ".tga": "Texture",
+        ".psd": "Texture",
+        ".exr": "Texture",
+        ".hdr": "Texture",
+        ".wav": "Audio",
+        ".mp3": "Audio",
+        ".ogg": "Audio",
+        ".mp4": "Video",
+    }
+    for logical, fallback_entry in sorted(logical_paths.items()):
+        asset_entry = entries_by_path.get(logical, fallback_entry)
+        if _has_unity_runtime_signal(asset_entry, manifest):
+            continue
+        if _asset_path_owner(logical, directories) != rel_dir:
+            continue
+        relative = posixpath.relpath(logical, rel_dir or ".")
+        suffix = PurePosixPath(logical).suffix.lower()
+        records.append((logical, relative, kind_labels.get(suffix, "Unity asset")))
+    return records
+
+
+def _unity_asset_paths_section(records: list[tuple[str, str, str]]) -> list[str]:
+    lines = [
+        "### Unity asset paths",
+        "",
+        "Path-only navigation for art/media or low-signal serialized assets; no "
+        "code-like responsibility is inferred.",
+        "",
+        "| Asset | Kind |",
+        "|---|---|",
+    ]
+    for _logical, relative, kind in records[:DEFAULT_UNITY_PATH_LIMIT]:
+        destination = _markdown_path(relative)
+        lines.append(f"| [`{_cell(relative)}`]({destination}) | {_cell(kind)} |")
+    if len(records) > DEFAULT_UNITY_PATH_LIMIT:
+        lines.append(
+            f"| … | {len(records) - DEFAULT_UNITY_PATH_LIMIT} additional paths omitted; "
+            "inspect the directory or manifest on demand. |"
+        )
+    lines.append("")
+    return lines
+
+
 def _root_unity_runtime(manifest: Manifest) -> list[str]:
     runtime = _unity_runtime_project(manifest)
     if not runtime:
@@ -553,6 +770,9 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
                 f"{metrics.get('prefabs', 0)} prefabs",
                 f"{metrics.get('scriptable_objects', 0)} ScriptableObjects",
                 f"{metrics.get('animator_controllers', 0)} Animator controllers",
+                f"{metrics.get('animation_clips', 0)} animation clips",
+                f"{metrics.get('materials', 0)} materials",
+                f"{metrics.get('meshes', 0)} meshes",
                 f"{metrics.get('game_objects', 0)} GameObjects",
                 f"{metrics.get('components', 0)} components",
                 f"{metrics.get('script_components', 0)} project-script usages",
@@ -669,17 +889,19 @@ def _render_directory(
         for entry in manifest.files
         if _parent(entry.path) == rel_dir and PurePosixPath(entry.path).name != "AGENTS.md"
     ]
-    runtime_files = [
-        entry
-        for entry in direct_files
-        if _has_unity_runtime_signal(entry, manifest)
-    ]
+    runtime_files = _unity_runtime_entries_for_map(rel_dir, directories, manifest)
+    asset_path_records = _unity_asset_path_records(rel_dir, directories, manifest)
     visible_files = [
         entry
         for entry in direct_files
-        if not entry.path.endswith(".meta") and not _unity_runtime(entry)
+        if not entry.path.endswith(".meta")
+        and not _unity_runtime(entry)
+        and not _logical_unity_asset_path(entry.path)
     ]
-    metadata_count = sum(entry.path.endswith(".meta") for entry in direct_files)
+    metadata_count = sum(
+        entry.path.endswith(".meta") and not _logical_unity_asset_path(entry.path)
+        for entry in direct_files
+    )
     children = sorted(value for value in directories if value and _parent(value) == rel_dir)
     title = (
         "Unity project map" if not rel_dir and unity else f"Folder map: {rel_dir or 'repository'}"
@@ -708,9 +930,21 @@ def _render_directory(
         lines.append("")
 
     if runtime_files:
-        lines.extend(_unity_runtime_assets_section(runtime_files, manifest))
+        lines.extend(_unity_runtime_assets_section(runtime_files, manifest, rel_dir))
 
-    if visible_files or metadata_count:
+    if asset_path_records:
+        lines.extend(_unity_asset_paths_section(asset_path_records))
+
+    if metadata_count and not visible_files:
+        lines.extend(
+            [
+                f"Unity metadata: {metadata_count} `.meta` sidecar file(s) hidden. "
+                "Never treated as C# dependencies.",
+                "",
+            ]
+        )
+
+    if visible_files:
         lines.extend(
             [
                 "### Source and configuration surface",
@@ -865,6 +1099,16 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
         if scripts:
             purpose += "; verified project scripts include " + ", ".join(scripts[:5])
         return purpose + "."
+    asset_paths = {
+        logical
+        for entry in files
+        if (logical := _logical_unity_asset_path(entry.path))
+    }
+    if asset_paths:
+        return (
+            f"Path-only navigation for {len(asset_paths)} Unity art/media asset(s); "
+            "no code responsibility is inferred."
+        )
     if name in purposes:
         return purposes[name]
     if files:
@@ -1242,7 +1486,7 @@ def _verified_responsibility(entry: FileEntry) -> str:
         return "Generated content; change its source or generator instead of hand-editing."
     documented = next((chunk.docstring for chunk in entry.chunks if chunk.docstring), None)
     if documented:
-        return documented
+        return str(documented)
     runtime = _unity_runtime(entry)
     if runtime:
         return _runtime_responsibility(entry, runtime)

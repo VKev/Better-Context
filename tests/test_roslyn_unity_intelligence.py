@@ -209,7 +209,10 @@ def test_unity_guid_edges_and_rich_agents_map(semantic_unity_project: Path):
     assert (semantic_unity_project / "Assets" / "Plugins" / "AGENTS.md").is_file()
     assert not (semantic_unity_project / "Assets" / "Plugins" / "UniRx" / "AGENTS.md").exists()
     assert not (semantic_unity_project / "Assets" / "Art" / "Icons" / "AGENTS.md").exists()
-    assert not (semantic_unity_project / "Assets" / "Prefabs" / "AGENTS.md").exists()
+    prefab_map = (
+        semantic_unity_project / "Assets" / "Prefabs" / "AGENTS.md"
+    ).read_text(encoding="utf-8")
+    assert "[`Actor.prefab`](Actor.prefab)" in prefab_map
 
 
 def test_manifest_records_exact_edge_evidence(semantic_unity_project: Path):

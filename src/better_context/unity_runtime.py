@@ -17,7 +17,15 @@ from typing import Any
 
 from .unity_intelligence import classify_ownership
 
-_ASSET_SUFFIXES = {".asset", ".controller", ".overridecontroller", ".prefab", ".unity"}
+_ASSET_SUFFIXES = {
+    ".anim",
+    ".asset",
+    ".controller",
+    ".mat",
+    ".overridecontroller",
+    ".prefab",
+    ".unity",
+}
 _DOCUMENT_HEADER = re.compile(
     r"^---\s+!u!(?P<class_id>-?\d+)\s+&(?P<file_id>-?\d+)"
     r"(?P<stripped>\s+stripped)?\s*$"
@@ -34,6 +42,8 @@ _GUID = re.compile(r"^[0-9a-fA-F]{32}$")
 _CLASS_NAMES = {
     1: "GameObject",
     4: "Transform",
+    21: "Material",
+    43: "Mesh",
     74: "AnimationClip",
     91: "AnimatorController",
     95: "Animator",
@@ -208,6 +218,7 @@ def _analyze_asset(
     base.update(object_context)
     _resolve_components(base, documents, docs, guid_to_assets, script_symbols)
     _collect_structured_references(base, documents, guid_to_assets)
+    _collect_serialized_asset_semantics(base, documents)
     _collect_prefab_instances(base, documents, guid_to_assets)
     _collect_events(
         root,
@@ -300,7 +311,11 @@ def _build_guid_index(inventory_by_path: dict[str, Any]) -> dict[str, list[str]]
         if not path.endswith(".meta"):
             continue
         asset_path = path[:-5]
-        if asset_path not in inventory_by_path:
+        absolute_meta = getattr(item, "absolute_path", None)
+        absolute_asset = Path(str(absolute_meta)[:-5]) if absolute_meta else None
+        if asset_path not in inventory_by_path and not (
+            absolute_asset and absolute_asset.is_file()
+        ):
             continue
         try:
             source = Path(item.absolute_path).read_text(encoding="utf-8", errors="replace")
@@ -310,6 +325,100 @@ def _build_guid_index(inventory_by_path: dict[str, Any]) -> dict[str, list[str]]
         if match:
             index[match.group(1).lower()].append(asset_path)
     return {guid: sorted(set(paths)) for guid, paths in index.items()}
+
+
+def _collect_serialized_asset_semantics(
+    asset: dict[str, Any],
+    documents: list[_Document],
+) -> None:
+    """Record compact facts only for asset formats with a known Unity schema."""
+    suffix = PurePosixPath(asset["path"]).suffix.lower()
+    if suffix == ".anim":
+        document = next(
+            (item for item in documents if item.type_name == "AnimationClip"), None
+        )
+        if document is None:
+            return
+        curve_sections = (
+            "m_FloatCurves",
+            "m_PositionCurves",
+            "m_RotationCurves",
+            "m_ScaleCurves",
+            "m_PPtrCurves",
+            "m_EditorCurves",
+        )
+        curve_maps = [
+            item
+            for section in curve_sections
+            for item in _list_maps(document, section)
+        ]
+        event_maps = _list_maps(document, "m_Events")
+        asset["kind"] = "animation_clip"
+        asset["animation_clip"] = {
+            "name": _scalar(document, "m_Name") or PurePosixPath(asset["path"]).stem,
+            "sample_rate": _as_number(_scalar(document, "m_SampleRate")),
+            "legacy": _as_bool(_scalar(document, "m_Legacy"), False),
+            "wrap_mode": _as_int(_scalar(document, "m_WrapMode"), 0),
+            "curve_count": sum(
+                _list_item_count(document, section) for section in curve_sections
+            ),
+            "binding_paths": sorted(
+                {item["path"] for item in curve_maps if item.get("path")}
+            ),
+            "properties": sorted(
+                {item["attribute"] for item in curve_maps if item.get("attribute")}
+            ),
+            "events": sorted(
+                {
+                    item["functionName"]
+                    for item in event_maps
+                    if item.get("functionName")
+                }
+            ),
+        }
+        return
+
+    if suffix == ".mat":
+        document = next((item for item in documents if item.type_name == "Material"), None)
+        if document is None:
+            return
+        shader: dict[str, Any] = next(
+            (
+                item
+                for item in asset.get("references", [])
+                if item.get("field") == "m_Shader"
+            ),
+            {},
+        )
+        texture_refs = [
+            item
+            for item in asset.get("references", [])
+            if item.get("field") == "m_Texture"
+        ]
+        asset["kind"] = "material"
+        asset["material"] = {
+            "name": _scalar(document, "m_Name") or PurePosixPath(asset["path"]).stem,
+            "shader": shader.get("target", ""),
+            "shader_guid": shader.get("guid", ""),
+            "textures": sorted(
+                {item["target"] for item in texture_refs if item.get("target")}
+            ),
+            "texture_reference_count": len(texture_refs),
+        }
+        return
+
+    if suffix == ".asset":
+        document = next((item for item in documents if item.type_name == "Mesh"), None)
+        if document is None:
+            return
+        asset["kind"] = "mesh"
+        asset["mesh"] = {
+            "name": _scalar(document, "m_Name") or PurePosixPath(asset["path"]).stem,
+            "vertex_count": _as_int(_scalar(document, "m_VertexCount"), 0),
+            "submesh_count": _list_item_count(document, "m_SubMeshes"),
+            "bounds_center": _scalar(document, "m_Center"),
+            "bounds_extent": _scalar(document, "m_Extent"),
+        }
 
 
 def _build_script_symbol_index(entries_by_path: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1451,6 +1560,9 @@ def _build_summary(
             "scriptable_object": "scriptable_objects",
             "animator_controller": "animator_controllers",
             "override_controller": "override_controllers",
+            "animation_clip": "animation_clips",
+            "material": "materials",
+            "mesh": "meshes",
         }.get(kind, "other_assets")
         metrics[plural] += 1
         metrics["game_objects"] += asset.get("object_count", 0)
@@ -1505,6 +1617,9 @@ def _build_summary(
         "scriptable_objects",
         "animator_controllers",
         "override_controllers",
+        "animation_clips",
+        "materials",
+        "meshes",
         "other_assets",
         "game_objects",
         "components",
@@ -1609,6 +1724,31 @@ def _responsibility(asset: dict[str, Any]) -> str:
         return f"{kind} wiring " + ", ".join(f"`{name}`" for name in names) + "."
     if asset.get("kind") == "scriptable_object" and asset.get("script"):
         return f"ScriptableObject instance of `{asset['script'].get('qualified_name', '')}`."
+    if asset.get("kind") == "animation_clip":
+        clip = asset.get("animation_clip", {})
+        sample_rate = clip.get("sample_rate")
+        rate = f" sampled at {sample_rate:g} fps" if isinstance(sample_rate, (int, float)) else ""
+        return (
+            f"Animation clip `{clip.get('name', '')}`{rate} with "
+            f"{clip.get('curve_count', 0)} curve(s) and "
+            f"{len(clip.get('events', []))} animation event(s)."
+        )
+    if asset.get("kind") == "material":
+        material = asset.get("material", {})
+        texture_count = int(material.get("texture_reference_count", 0) or 0)
+        texture_label = "texture reference" if texture_count == 1 else "texture references"
+        shader = material.get("shader") or "an unresolved/built-in shader"
+        return (
+            f"Material `{material.get('name', '')}` using `{shader}` with "
+            f"{texture_count} {texture_label}."
+        )
+    if asset.get("kind") == "mesh":
+        mesh = asset.get("mesh", {})
+        return (
+            f"Mesh `{mesh.get('name', '')}` containing "
+            f"{mesh.get('vertex_count', 0)} vertices across "
+            f"{mesh.get('submesh_count', 0)} submesh(es)."
+        )
     animator = asset.get("animator", {})
     if animator:
         return (
@@ -1634,6 +1774,10 @@ def _responsibility(asset: dict[str, Any]) -> str:
 
 def _high_signal(asset: dict[str, Any]) -> int:
     animator = asset.get("animator", {})
+    semantic_art = any(
+        asset.get(key)
+        for key in ("animation_clip", "material", "mesh")
+    )
     return int(
         asset.get("script_component_count", 0) * 3
         + len(asset.get("unity_events", [])) * 5
@@ -1641,6 +1785,7 @@ def _high_signal(asset: dict[str, Any]) -> int:
         + len(animator.get("transitions", []))
         + len(animator.get("blend_trees", [])) * 2
         + (4 if asset.get("kind") == "scriptable_object" else 0)
+        + (1 if semantic_art else 0)
     )
 
 
@@ -1651,6 +1796,8 @@ def _kind_for_path(path: str) -> str:
         ".prefab": "prefab",
         ".controller": "animator_controller",
         ".overridecontroller": "override_controller",
+        ".anim": "animation_clip",
+        ".mat": "material",
     }.get(suffix, "asset")
 
 
@@ -1675,6 +1822,14 @@ def _as_int(value: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _as_number(value: str) -> int | float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(parsed) if parsed.is_integer() else parsed
 
 
 def _as_bool(value: str, default: bool) -> bool:

@@ -5,7 +5,7 @@ mathematically structured, semantically meaningful pieces that AI agents
 can progressively consume.
 """
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # Re-export key types for convenient access
 from better_context.config import Config, load_config, validate_config

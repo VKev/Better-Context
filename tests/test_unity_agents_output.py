@@ -387,8 +387,12 @@ def test_runtime_assets_render_semantic_maps_with_bounded_previews(tmp_path: Pat
     assert "states: `Idle`, `Attack`" in animator_map
     assert "parameters: `Speed`" in animator_map
 
-    assert not (root / "Assets" / "Art" / "AGENTS.md").exists()
-    assert not (root / "Assets" / "Plugins" / "AGENTS.md").exists()
+    art_map = (root / "Assets" / "Art" / "AGENTS.md").read_text(encoding="utf-8")
+    vendor_map = (root / "Assets" / "Plugins" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert "[`Decoration.prefab`](Decoration.prefab)" in art_map
+    assert "[`Vendor/Vendor.prefab`](Vendor/Vendor.prefab)" in vendor_map
 
 
 def test_runtime_asset_links_and_root_cap_are_deterministic(tmp_path: Path) -> None:
@@ -470,6 +474,114 @@ def test_root_accepts_compact_runtime_asset_records(tmp_path: Path) -> None:
     assert "Assets/UI/Compact%20Button.prefab" in root_map
     assert "Compact Button → Game.UI.CompactButton.Submit()" in root_map
     assert "1 UnityEvent bindings" in root_map
+
+
+def test_art_assets_get_bounded_path_maps_without_invented_responsibility(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "UnityGame"
+    (root / "Assets").mkdir(parents=True)
+    (root / "ProjectSettings").mkdir()
+    (root / "ProjectSettings" / "ProjectVersion.txt").write_text(
+        "m_EditorVersion: 2022.3.62f2\n", encoding="utf-8"
+    )
+    paths = [
+        "Assets/Drone/DroneV21/Drone.fbx.meta",
+        "Assets/Drone/DroneV21/Drone_D.png.meta",
+        "Assets/Drone/DroneV20/Run.anim",
+        "Assets/Imported/Pack/Models/Materials/Stone.mat",
+        "Assets/GoogleMobileAds/Resources/GoogleMobileAdsSettings.asset",
+    ]
+    entries = []
+    for path in paths:
+        target = root / Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("fixture\n", encoding="utf-8")
+        if path.endswith(".meta"):
+            target.with_suffix("").write_bytes(b"fixture")
+        ownership = "vendor" if path.startswith("Assets/GoogleMobileAds/") else "project-owned"
+        metadata: dict[str, Any] = {"ownership": ownership}
+        if path.endswith("Run.anim"):
+            metadata["unity_runtime"] = {
+                "path": path,
+                "kind": "animation_clip",
+                "status": "parsed",
+                "ownership": ownership,
+                "high_signal": 1,
+                "responsibility": "Animation clip `Run` sampled at 60 fps with 1 curve(s).",
+                "animation_clip": {"name": "Run", "sample_rate": 60, "curve_count": 1},
+            }
+        if path.endswith("Stone.mat"):
+            metadata["unity_runtime"] = {
+                "path": path,
+                "kind": "material",
+                "status": "parsed",
+                "ownership": ownership,
+                "high_signal": 1,
+                "responsibility": "Material `Stone` using a built-in shader.",
+                "material": {"name": "Stone", "texture_reference_count": 0},
+            }
+        entries.append(
+            FileEntry(
+                path=path,
+                language="",
+                size_bytes=8,
+                hash=path,
+                metadata=metadata,
+            )
+        )
+    orphan = root / "Assets" / "Orphan" / "Ghost.png.meta"
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_text("fixture\n", encoding="utf-8")
+    entries.append(
+        FileEntry(
+            path="Assets/Orphan/Ghost.png.meta",
+            language="",
+            size_bytes=8,
+            hash="orphan",
+            metadata={"ownership": "project-owned"},
+        )
+    )
+    manifest = Manifest(
+        meta=ManifestMeta("1.2.0", "now", "test", root.as_posix(), "hash"),
+        files=entries,
+        graph=GraphData(nodes=[entry.path for entry in entries]),
+        project={"kind": "unity", "unity_runtime": {"scope": "project-owned"}},
+    )
+    graph = build_graph_from_edges([], nodes=[entry.path for entry in entries])
+
+    generated = generate_agents_map(manifest, graph, root)
+    assert not generated.errors
+
+    drone_map = (root / "Assets" / "Drone" / "AGENTS.md").read_text(encoding="utf-8")
+    model_map = (root / "Assets" / "Drone" / "DroneV21" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    animation_map = (
+        root / "Assets" / "Drone" / "DroneV20" / "AGENTS.md"
+    ).read_text(encoding="utf-8")
+    vendor_map = (
+        root / "Assets" / "GoogleMobileAds" / "AGENTS.md"
+    ).read_text(encoding="utf-8")
+    imported_map = (root / "Assets" / "Imported" / "Pack" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "[`DroneV21/`](DroneV21/AGENTS.md)" in drone_map
+    assert "### Unity asset paths" in model_map
+    assert "[`Drone.fbx`](Drone.fbx)" in model_map
+    assert "[`Drone_D.png`](Drone_D.png)" in model_map
+    assert "Verified responsibility" not in model_map
+    assert "### Unity runtime assets" in animation_map
+    assert "Animation clip `Run` sampled at 60 fps" in animation_map
+    assert (
+        "[`Resources/GoogleMobileAdsSettings.asset`]"
+        "(Resources/GoogleMobileAdsSettings.asset)"
+    ) in vendor_map
+    assert "[`Models/Materials/Stone.mat`](Models/Materials/Stone.mat)" in imported_map
+    assert not (root / "Assets" / "Imported" / "Pack" / "Models" / "AGENTS.md").exists()
+    assert not (root / "Assets" / "GoogleMobileAds" / "Resources" / "AGENTS.md").exists()
+    assert not (root / "Assets" / "Orphan" / "AGENTS.md").exists()
 
 
 def test_architecture_and_cycle_rendering_is_order_independent() -> None:

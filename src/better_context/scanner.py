@@ -49,7 +49,15 @@ BINARY_EXTENSIONS: frozenset[str] = frozenset({
 # Default maximum file size (1MB)
 DEFAULT_MAX_FILE_SIZE_KB = 1024
 UNITY_STREAMED_ASSET_EXTENSIONS: frozenset[str] = frozenset(
-    {".asset", ".controller", ".overridecontroller", ".prefab", ".unity"}
+    {
+        ".anim",
+        ".asset",
+        ".controller",
+        ".mat",
+        ".overridecontroller",
+        ".prefab",
+        ".unity",
+    }
 )
 
 

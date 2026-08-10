@@ -651,6 +651,96 @@ AnimatorController:
     assert "animator_motion" in edge["kinds"]
 
 
+def test_animation_material_and_mesh_have_verified_semantics(tmp_path: Path) -> None:
+    root = tmp_path / "Unity"
+    shader_guid = "88888888888888888888888888888888"
+    texture_guid = "99999999999999999999999999999999"
+    _write(root, "Assets/Shaders/Lit.shader", "Shader \"Fixture/Lit\" {}\n")
+    _meta(root, "Assets/Shaders/Lit.shader", shader_guid)
+    _write(root, "Assets/Textures/Body.png", b"\x89PNG\x00fixture")
+    _meta(root, "Assets/Textures/Body.png", texture_guid)
+    _write(
+        root,
+        "Assets/Animations/Run.anim",
+        """--- !u!74 &7400000
+AnimationClip:
+  m_Name: Run
+  m_Legacy: 0
+  m_SampleRate: 60
+  m_WrapMode: 2
+  m_FloatCurves:
+  - curve: fixture
+    attribute: m_LocalPosition.x
+    path: Root/Hips
+  m_Events:
+  - time: 0.5
+    functionName: Footstep
+""",
+    )
+    _write(
+        root,
+        "Assets/Materials/Body.mat",
+        f"""--- !u!21 &2100000
+Material:
+  m_Name: Body
+  m_Shader: {{fileID: 4800000, guid: {shader_guid}, type: 3}}
+  m_SavedProperties:
+    m_TexEnvs:
+    - _MainTex:
+        m_Texture: {{fileID: 2800000, guid: {texture_guid}, type: 3}}
+""",
+    )
+    _write(
+        root,
+        "Assets/Meshes/Drone.asset",
+        """--- !u!43 &4300000
+Mesh:
+  m_Name: Drone
+  m_SubMeshes:
+  - serializedVersion: 2
+  - serializedVersion: 2
+  m_VertexData:
+    m_VertexCount: 128
+  m_LocalAABB:
+    m_Center: {x: 0, y: 1, z: 0}
+    m_Extent: {x: 2, y: 1, z: 3}
+""",
+    )
+
+    result = analyze_unity_runtime(root, _inventory(root), [])
+
+    clip = result.assets["Assets/Animations/Run.anim"]
+    assert clip["kind"] == "animation_clip"
+    assert clip["animation_clip"] == {
+        "name": "Run",
+        "sample_rate": 60,
+        "legacy": False,
+        "wrap_mode": 2,
+        "curve_count": 1,
+        "binding_paths": ["Root/Hips"],
+        "properties": ["m_LocalPosition.x"],
+        "events": ["Footstep"],
+    }
+    assert "60 fps" in clip["responsibility"]
+
+    material = result.assets["Assets/Materials/Body.mat"]
+    assert material["kind"] == "material"
+    assert material["material"]["shader"] == "Assets/Shaders/Lit.shader"
+    assert material["material"]["textures"] == ["Assets/Textures/Body.png"]
+    assert "1 texture reference" in material["responsibility"]
+
+    mesh = result.assets["Assets/Meshes/Drone.asset"]
+    assert mesh["kind"] == "mesh"
+    assert mesh["mesh"]["vertex_count"] == 128
+    assert mesh["mesh"]["submesh_count"] == 2
+    assert "128 vertices" in mesh["responsibility"]
+
+    metrics = result.summary["metrics"]
+    assert metrics["animation_clips"] == 1
+    assert metrics["materials"] == 1
+    assert metrics["meshes"] == 1
+
+
 def test_wrapped_structured_references_remain_exact(tmp_path: Path) -> None:
     root = tmp_path / "Unity"
     _write(root, "Assets/Prefabs/Target.prefab", "--- !u!1 &1\nGameObject:\n  m_Name: T\n")
