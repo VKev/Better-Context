@@ -181,6 +181,7 @@ def test_monoscript_get_class_resolves_ui_component_and_sprite(tmp_path: Path) -
         "GameObject:\n"
         "  m_Component:\n"
         "  - component: {fileID: 2}\n"
+        "  - component: {fileID: 3}\n"
         "  m_Name: Button\n"
         "  m_IsActive: 1\n"
         "--- !u!114 &2\n"
@@ -190,7 +191,14 @@ def test_monoscript_get_class_resolves_ui_component_and_sprite(tmp_path: Path) -
         f"  m_Script: {{fileID: 11500000, guid: {script_guid}, type: 3}}\n"
         f"  m_Sprite: {{fileID: 21300000, guid: {sprite_guid}, type: 3}}\n"
         "  m_Type: 0\n"
+        "  m_FillMethod: 1\n"
         "  m_PreserveAspect: 1\n"
+        "--- !u!223 &3\n"
+        "Canvas:\n"
+        "  m_GameObject: {fileID: 1}\n"
+        "  m_Enabled: 1\n"
+        "  m_Camera: {fileID: 0}\n"
+        "  m_RenderMode: 0\n"
     )
     (tmp_path / "Assets" / "Button.prefab.meta").write_text(f"guid: {'c' * 32}\n")
     (tmp_path / "Assets" / "Icon.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
@@ -242,6 +250,11 @@ def test_monoscript_get_class_resolves_ui_component_and_sprite(tmp_path: Path) -
     assert component["qualified_type"] == "UnityEngine.UI.Image"
     assert component["boundary"] == "package"
     assert component["provenance"] == "unity-editor-monoscript"
+    assert component["fields"]["m_FillMethod"] == 1
+    assert component["fields"]["m_PreserveAspect"] is True
+    canvas = analysis.assets["Assets/Button.prefab"]["objects"][0]["components"][1]
+    assert canvas["fields"]["m_RenderMode"] == 0
+    assert canvas["references"] == []
     sprite = next(item for item in component["references"] if item["field"] == "m_Sprite")
     assert sprite["target"] == "Assets/Icon.png"
     assert sprite["subasset"] == {

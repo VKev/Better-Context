@@ -207,6 +207,28 @@ _COMPONENT_FIELDS: dict[str, tuple[str, ...]] = {
         "m_DirectorUpdateMode",
     ),
 }
+_BOOLEAN_COMPONENT_FIELDS = {
+    "looping",
+    "m_BlocksRaycasts",
+    "m_Carving",
+    "m_Convex",
+    "m_Enabled",
+    "m_Horizontal",
+    "m_Interactable",
+    "m_IsKinematic",
+    "m_IsOn",
+    "m_IsTrigger",
+    "m_Loop",
+    "m_PlayAutomatically",
+    "m_PlayOnAwake",
+    "m_PreserveAspect",
+    "m_UpdateWhenOffscreen",
+    "m_UseGravity",
+    "m_Vertical",
+    "m_WholeNumbers",
+    "m_enableWordWrapping",
+    "playOnAwake",
+}
 _GENERIC_COMPONENT_SKIP_FIELDS = {
     "m_CorrespondingSourceObject",
     "m_GameObject",
@@ -1022,7 +1044,10 @@ def _selected_component_fields(
         for name in selected:
             value = _scalar(document, name)
             if value and not _inline_reference(value):
-                result[name] = _typed_scalar(value)
+                result[name] = _typed_scalar(
+                    value,
+                    boolean=name in _BOOLEAN_COMPONENT_FIELDS,
+                )
         return result
 
     for _line_number, line in document.lines:
@@ -1043,9 +1068,9 @@ def _selected_component_fields(
     return result
 
 
-def _typed_scalar(value: str) -> Any:
+def _typed_scalar(value: str, *, boolean: bool = False) -> Any:
     value = _unquote(value)
-    if value in {"0", "1"}:
+    if boolean and value in {"0", "1"}:
         return bool(int(value))
     number = _as_number(value)
     return number if number is not None else value
@@ -1067,6 +1092,8 @@ def _component_references(
             continue
         guid = reference.get("guid", "").lower()
         file_id = reference.get("file_id", "0")
+        if not guid and file_id == "0":
+            continue
         targets = guid_to_assets.get(guid, []) if guid else []
         item: dict[str, Any] = {
             "field": field_name,
