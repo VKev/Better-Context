@@ -211,6 +211,15 @@ class TestCalculateRelevance:
         )
         assert 0 <= relevance <= 1
 
+    def test_path_and_camel_case_are_searchable(self):
+        chunk = create_test_chunk("GetActiveConfig")
+        relevance = calculate_relevance(
+            chunk,
+            task_description="Firebase remote config",
+            file_path="Assets/Scripts/Firebase/FirebaseService.cs",
+        )
+        assert relevance > 0
+
 
 # ============================================================================
 # Diversity Penalty Tests
@@ -376,6 +385,21 @@ class TestPrepareChunks:
         
         # First chunk should have higher efficiency
         assert chunks[0].efficiency >= chunks[1].efficiency
+
+    def test_excludes_vendor_and_generated_boundaries(self):
+        project = create_test_file_entry("Assets/Game/FirebaseService.cs", [create_test_chunk("Fetch")])
+        project.metadata["ownership"] = "project-owned"
+        vendor = create_test_file_entry("Assets/Tools/Vendor.cs", [create_test_chunk("Fetch")])
+        vendor.metadata["ownership"] = "vendor"
+        manifest = create_test_manifest([project, vendor])
+
+        chunks = prepare_chunks(
+            manifest,
+            {project.path: 0.5, vendor.path: 1.0},
+            task_description="Firebase fetch",
+        )
+
+        assert {chunk.file_path for chunk in chunks} == {project.path}
 
 
 # ============================================================================

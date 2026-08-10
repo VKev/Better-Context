@@ -154,6 +154,7 @@ def calculate_relevance(
     chunk: ChunkEntry,
     keywords: list[str] | None = None,
     task_description: str | None = None,
+    file_path: str = "",
 ) -> float:
     """Calculate relevance score for a chunk based on keywords/task.
     
@@ -168,22 +169,24 @@ def calculate_relevance(
     if not keywords and not task_description:
         return 1.0  # No filtering, all chunks equally relevant
     
-    # Build searchable text from chunk
-    search_text = f"{chunk.name} {chunk.type} {chunk.docstring or ''}"
-    search_text = search_text.lower()
+    # Include the path and qualified name, and split CamelCase so task terms such
+    # as "firebase" and "config" match FirebaseService/GetActiveConfig.
+    qualified = chunk.metadata.get("qualified_name", "")
+    search_tokens = _semantic_tokens(
+        f"{file_path} {qualified} {chunk.name} {chunk.type} {chunk.docstring or ''}"
+    )
     
     # Keyword matching
     if keywords:
-        keyword_matches = sum(1 for kw in keywords if kw.lower() in search_text)
+        keyword_matches = sum(1 for kw in keywords if _semantic_tokens(kw) & search_tokens)
         keyword_score = keyword_matches / len(keywords) if keywords else 0
     else:
         keyword_score = 0
     
     # Task description matching (simple token overlap)
     if task_description:
-        task_tokens = set(re.findall(r'\w+', task_description.lower()))
-        chunk_tokens = set(re.findall(r'\w+', search_text))
-        overlap = len(task_tokens & chunk_tokens)
+        task_tokens = _semantic_tokens(task_description)
+        overlap = len(task_tokens & search_tokens)
         task_score = overlap / len(task_tokens) if task_tokens else 0
     else:
         task_score = 0
@@ -195,6 +198,11 @@ def calculate_relevance(
         return keyword_score
     else:
         return task_score
+
+
+def _semantic_tokens(value: str) -> set[str]:
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+    return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", separated)}
 
 
 def calculate_diversity_penalty(
@@ -267,6 +275,13 @@ def prepare_chunks(
     
     for file_entry in manifest.files:
         file_path = file_entry.path
+        if file_entry.metadata.get("ownership") in {
+            "generated",
+            "package",
+            "unity-generated",
+            "vendor",
+        }:
+            continue
         pagerank = centrality.get(file_path, 0.0)
         
         # Skip low-importance files
@@ -284,7 +299,12 @@ def prepare_chunks(
                 continue
             
             # Calculate relevance
-            relevance = calculate_relevance(chunk, keywords, task_description)
+            relevance = calculate_relevance(
+                chunk,
+                keywords,
+                task_description,
+                file_path=file_path,
+            )
             
             # Base score: PageRank × relevance
             # Boost exported/public symbols slightly
@@ -348,6 +368,8 @@ def optimize_context_greedy(
     considered = len(candidates)
     
     # Filter by minimum relevance
+    if keywords or task_description:
+        min_relevance = max(min_relevance, 1e-12)
     if min_relevance > 0:
         candidates = [c for c in candidates if c.relevance >= min_relevance]
     
@@ -436,6 +458,9 @@ def optimize_context_knapsack(
     )
     
     considered = len(candidates)
+
+    if keywords or task_description:
+        candidates = [candidate for candidate in candidates if candidate.relevance > 0]
     
     # Limit for performance
     if len(candidates) > max_chunks:
