@@ -46,6 +46,76 @@ def _script(name: str, path: str) -> dict[str, object]:
     }
 
 
+def test_editor_asset_metrics_and_low_signal_art_collapse(tmp_path: Path) -> None:
+    target = _runtime_entry(
+        tmp_path,
+        "Assets/Art/target.png",
+        {
+            "kind": "texture",
+            "high_signal": 2,
+            "responsibility": "Texture `target.png` (512×512) importing 1 Sprite subasset(s).",
+            "editor_asset": {
+                "facts": {
+                    "source_width": "512",
+                    "source_height": "512",
+                    "pixels_per_unit": "100",
+                    "mipmaps": "false",
+                    "platform.Android.overridden": "true",
+                    "platform.Android.max_texture_size": "1024",
+                },
+                "subassets": [{"name": "target", "local_id": 21300000}],
+            },
+        },
+    )
+    pure = _runtime_entry(
+        tmp_path,
+        "Assets/Art/Background.png",
+        {
+            "kind": "texture",
+            "high_signal": 0,
+            "responsibility": "Texture `Background.png` imported at 2048×1024.",
+            "editor_asset": {
+                "facts": {"source_width": "2048", "source_height": "1024"},
+                "subassets": [],
+            },
+        },
+    )
+    manifest = Manifest(
+        meta=ManifestMeta("1.3.0", "now", "better-context-unity/1.6.0", str(tmp_path), "x"),
+        files=[target, pure],
+        graph=GraphData(nodes=[target.path, pure.path]),
+        project={
+            "unity_runtime": {
+                "scope": "project-owned",
+                "metrics": {
+                    "assets": 2,
+                    "textures": 2,
+                    "sprites": 1,
+                    "resolved_components": 0,
+                },
+                "coverage": {"candidates": 2, "parsed": 2},
+                "editor_snapshot": {
+                    "status": "fresh",
+                    "mode": "batch",
+                    "coverage": {"assets_exported": 2},
+                },
+            }
+        },
+    )
+    graph = build_graph_from_edges([], [target.path, pure.path])
+
+    generate_agents_map(manifest, graph, tmp_path)
+
+    root_map = (tmp_path / "AGENTS.md").read_text()
+    art_map = (tmp_path / "Assets" / "Art" / "AGENTS.md").read_text()
+    assert "2 textures" in root_map
+    assert "1 Sprite subassets" in root_map
+    assert "Unity Editor snapshot: fresh via `batch`" in root_map
+    assert "Android override: `max 1024`" in art_map
+    assert "Background.png" in art_map
+    assert "Texture `Background.png` imported at 2048×1024" not in art_map
+
+
 def _manifest(root: Path) -> tuple[Manifest, object]:
     gun_button = _script("Game.UI.GunButtonView", "Assets/Scripts/UI/GunButtonView.cs")
     player = _script("Game.PlayerController", "Assets/Scripts/PlayerController.cs")

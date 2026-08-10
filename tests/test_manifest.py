@@ -3,33 +3,33 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from better_context.manifest import (
     MANIFEST_VERSION,
-    Manifest,
-    ManifestMeta,
-    FileEntry,
     ChunkEntry,
-    ImportEntry,
     ExportEntry,
+    FileEntry,
     GraphData,
-    ParseError,
+    ImportEntry,
+    Manifest,
     ManifestDiff,
+    ManifestMeta,
+    ParseError,
     create_manifest_meta,
-    manifest_to_dict,
-    save_manifest,
-    load_manifest,
     dict_to_manifest,
-    validate_manifest,
     diff_manifests,
     generator_version,
+    load_manifest,
+    manifest_to_dict,
+    save_manifest,
+    validate_manifest,
 )
 
 
@@ -47,7 +47,7 @@ class TestManifestMeta:
         assert meta.generated_at  # Should be non-empty ISO timestamp
 
     def test_unity_runtime_schema_version(self):
-        assert MANIFEST_VERSION == "1.2.0"
+        assert MANIFEST_VERSION == "1.3.0"
 
 
 class TestChunkEntry:

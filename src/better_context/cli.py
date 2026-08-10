@@ -12,40 +12,6 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional
 
-from .config import load_config
-from .manifest import MANIFEST_VERSION, Manifest, generator_version, load_manifest
-from .orchestrator import Orchestrator, generate_context
-from .staleness import (
-    check_staleness,
-    collect_current_hashes,
-    compute_source_hash,
-    format_staleness_report,
-    load_staleness_info,
-    save_staleness_info,
-)
-from .primitives.overview import analyze_overview
-from .primitives.tree import analyze_tree
-from .primitives.scripts import analyze_scripts
-from .primitives.entries import analyze_entry_points
-from .primitives.file_info import analyze_file
-from .primitives.deps import get_file_dependencies
-from .primitives.formatters import (
-    format_json,
-    format_tree_human,
-    format_tree_markdown,
-    format_overview_human,
-    format_overview_markdown,
-    format_scripts_human,
-    format_scripts_markdown,
-    format_entries_human,
-    format_entries_markdown,
-    format_file_info_human,
-    format_file_info_markdown,
-    format_deps_human,
-    format_deps_markdown,
-)
-from .graph import build_dependency_graph, build_graph_from_edges
-from .scanner import walk_repository, FileInventory
 from .agents_map import (
     SUMMARY_FILE,
     generate_agents_map,
@@ -55,6 +21,48 @@ from .agents_map import (
     remove_managed_map,
     save_summaries,
     summary_targets,
+)
+from .config import Config, load_config
+from .graph import build_dependency_graph, build_graph_from_edges
+from .manifest import MANIFEST_VERSION, Manifest, generator_version, load_manifest
+from .orchestrator import Orchestrator, generate_context
+from .primitives.deps import get_file_dependencies
+from .primitives.entries import analyze_entry_points
+from .primitives.file_info import analyze_file
+from .primitives.formatters import (
+    format_deps_human,
+    format_deps_markdown,
+    format_entries_human,
+    format_entries_markdown,
+    format_file_info_human,
+    format_file_info_markdown,
+    format_json,
+    format_overview_human,
+    format_overview_markdown,
+    format_scripts_human,
+    format_scripts_markdown,
+    format_tree_human,
+    format_tree_markdown,
+)
+from .primitives.overview import analyze_overview
+from .primitives.scripts import analyze_scripts
+from .primitives.tree import analyze_tree
+from .scanner import FileInventory, walk_repository
+from .staleness import (
+    check_staleness,
+    collect_current_hashes,
+    compute_source_hash,
+    format_staleness_report,
+    load_staleness_info,
+    save_staleness_info,
+)
+from .unity_editor import (
+    discover_unity_editor,
+    editor_package_spec,
+    get_editor_snapshot_status,
+    install_editor_package,
+    project_unity_version,
+    sync_editor_snapshot,
 )
 
 
@@ -205,6 +213,36 @@ Agent Workflow:
     deps_parser.add_argument("path", help="Path to file")
     deps_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
 
+    # --- editor command ---
+    editor_parser = subparsers.add_parser(
+        "editor",
+        help="Install, inspect, or refresh Unity Editor asset intelligence",
+    )
+    editor_subparsers = editor_parser.add_subparsers(dest="editor_command", required=True)
+    editor_install_parser = editor_subparsers.add_parser(
+        "install",
+        help="Pin the companion UPM package in Packages/manifest.json",
+    )
+    editor_install_parser.add_argument(
+        "--revision",
+        default="v1.6.0",
+        help="Immutable Git commit or release tag to pin (default: v1.6.0)",
+    )
+    editor_status_parser = editor_subparsers.add_parser(
+        "status",
+        help="Report bridge installation, Unity path, and snapshot freshness",
+    )
+    editor_status_parser.add_argument(
+        "--format", choices=["json", "human"], default="human"
+    )
+    editor_sync_parser = editor_subparsers.add_parser(
+        "sync",
+        help="Export a fresh Unity Editor snapshot",
+    )
+    editor_sync_parser.add_argument(
+        "--mode", choices=["auto", "open", "batch"], default="auto"
+    )
+
     # --- unity command ---
     unity_parser = subparsers.add_parser(
         "unity",
@@ -247,6 +285,16 @@ Agent Workflow:
     unity_bindings_parser.add_argument("--type", help="Filter by exact target type")
     unity_bindings_parser.add_argument("--method", help="Filter by exact target method")
     unity_bindings_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
+    unity_components_parser = unity_subparsers.add_parser(
+        "components",
+        help="List resolved Unity component facts from scene or prefab assets",
+    )
+    unity_components_parser.add_argument("--asset", help="Filter by exact asset path")
+    unity_components_parser.add_argument("--type", help="Filter by exact qualified type")
+    unity_components_parser.add_argument("--object", help="Filter by exact GameObject path")
+    unity_components_parser.add_argument(
         "--format", choices=["json", "human", "markdown"], default="json"
     )
 
@@ -438,6 +486,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "entries": cmd_entries,
         "file": cmd_file,
         "deps": cmd_deps,
+        "editor": cmd_editor,
         "unity": cmd_unity,
     }
 
@@ -856,6 +905,148 @@ def _format_unity_bindings(bindings: list[dict[str, Any]], fmt: str) -> str:
     return "\n".join(lines)
 
 
+def _unity_components(manifest: Manifest) -> list[dict[str, Any]]:
+    components: list[dict[str, Any]] = []
+    for entry in manifest.files:
+        runtime = entry.metadata.get("unity_runtime")
+        if not isinstance(runtime, dict):
+            continue
+        for obj in runtime.get("objects", []):
+            if not isinstance(obj, dict):
+                continue
+            object_path = str(obj.get("path", obj.get("name", "")))
+            for component in obj.get("components", []):
+                if not isinstance(component, dict):
+                    continue
+                components.append(
+                    {
+                        "asset": entry.path,
+                        "object": object_path,
+                        **component,
+                    }
+                )
+    return sorted(
+        components,
+        key=lambda item: (
+            str(item.get("asset", "")),
+            str(item.get("object", "")),
+            str(item.get("type", "")),
+            str(item.get("file_id", "")),
+        ),
+    )
+
+
+def _format_unity_components(components: list[dict[str, Any]], fmt: str) -> str:
+    if fmt == "json":
+        return json.dumps({"count": len(components), "components": components}, indent=2)
+    if fmt == "markdown":
+        lines = ["| Asset | Object | Type | Enabled | Fields |", "|---|---|---|---:|---|"]
+        for item in components:
+            fields = _unity_cell(item.get("fields", {})).replace("|", "\\|")
+            lines.append(
+                f"| {_unity_cell(item.get('asset'))} | {_unity_cell(item.get('object'))} | "
+                f"{_unity_cell(item.get('qualified_type') or item.get('type'))} | "
+                f"{_unity_cell(item.get('enabled', '—'))} | {fields} |"
+            )
+        return "\n".join(lines)
+    lines = [f"Unity components: {len(components)}"]
+    for item in components:
+        type_name = item.get("qualified_type") or item.get("type", "—")
+        lines.append(
+            f"- {item.get('asset', '—')} :: {item.get('object', '—')} -> {type_name} "
+            f"[enabled={item.get('enabled', '—')}]"
+        )
+        if item.get("fields"):
+            lines.append(f"  fields: {_unity_cell(item['fields'])}")
+        if item.get("references"):
+            lines.append(f"  references: {_unity_cell(item['references'])}")
+    return "\n".join(lines)
+
+
+def _prepare_editor_snapshot(root: Path, config: Config) -> None:
+    """Refresh stale Editor facts for analysis, or report bounded offline coverage."""
+    if not project_unity_version(root):
+        return
+    status = get_editor_snapshot_status(root, config.output_dir)
+    if status.state == "fresh":
+        print("[editor] Reusing fresh Unity Editor snapshot.")
+        return
+    if config.unity_editor_mode == "offline":
+        message = "Unity Editor enrichment is disabled; using offline asset coverage."
+        if config.unity_editor_required:
+            raise RuntimeError(message)
+        print(f"[warning] {message}")
+        return
+    if not editor_package_spec(root):
+        message = (
+            "Unity Editor bridge is not installed; using offline asset coverage. "
+            "Run 'better-context-unity editor install'."
+        )
+        if config.unity_editor_required:
+            raise RuntimeError(message)
+        print(f"[warning] {message}")
+        return
+    result = sync_editor_snapshot(
+        root,
+        mode=config.unity_editor_mode,
+        output_dir=config.output_dir,
+        timeout_seconds=config.unity_editor_timeout_seconds,
+        editor_path=config.unity_editor_path,
+    )
+    if result.success:
+        print(f"[editor] {result.message}")
+        return
+    if config.unity_editor_required:
+        raise RuntimeError(result.message)
+    print(f"[warning] {result.message} Continuing with offline asset coverage.")
+
+
+def cmd_editor(args: argparse.Namespace) -> int:
+    """Manage the companion Unity Editor bridge and its snapshot."""
+    root = args.root.resolve()
+    config = load_config(root, getattr(args, "config", None))
+    if args.editor_command == "install":
+        success, message = install_editor_package(root, args.revision)
+        print(f"[editor] {message}" if success else f"[error] {message}")
+        return 0 if success else 1
+    if args.editor_command == "status":
+        status = get_editor_snapshot_status(root, config.output_dir)
+        executable = discover_unity_editor(root, config.unity_editor_path)
+        payload = {
+            "package": editor_package_spec(root) or None,
+            "unity_version": project_unity_version(root) or None,
+            "unity_editor_path": str(executable) if executable else None,
+            "snapshot_state": status.state,
+            "snapshot_path": str(status.snapshot_path),
+            "message": status.message,
+            "mode": status.snapshot.get("mode") if status.snapshot else None,
+            "coverage": status.snapshot.get("coverage", {}) if status.snapshot else {},
+        }
+        if args.format == "json":
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"Bridge package: {payload['package'] or 'not installed'}")
+            print(f"Unity version: {payload['unity_version'] or 'unknown'}")
+            print(f"Unity executable: {payload['unity_editor_path'] or 'not found'}")
+            print(f"Snapshot: {status.state} ({status.snapshot_path})")
+            print(status.message)
+        return 0 if status.state == "fresh" else 1
+    if args.editor_command == "sync":
+        result = sync_editor_snapshot(
+            root,
+            mode=args.mode,
+            output_dir=config.output_dir,
+            timeout_seconds=config.unity_editor_timeout_seconds,
+            editor_path=config.unity_editor_path,
+        )
+        print(f"[editor] {result.message}" if result.success else f"[error] {result.message}")
+        for error in result.errors:
+            print(f"[warning] {error}")
+        return 0 if result.success else 1
+    print(f"[error] Unknown Editor command: {args.editor_command}")
+    return 1
+
+
 def cmd_unity(args: argparse.Namespace) -> int:
     """Query Unity runtime intelligence from a verified fresh manifest."""
     manifest = _load_fresh_unity_manifest(args)
@@ -943,6 +1134,38 @@ def cmd_unity(args: argparse.Namespace) -> int:
         print(_format_unity_bindings(bindings, args.format))
         return 0
 
+    if args.unity_command == "components":
+        components = _unity_components(manifest)
+        if args.asset:
+            try:
+                expected_asset = _normalize_unity_path(args.asset).casefold()
+            except ValueError as exc:
+                print(f"[error] {exc}")
+                return 1
+            components = [
+                item
+                for item in components
+                if str(item.get("asset", "")).casefold() == expected_asset
+            ]
+        if args.type:
+            expected_type = args.type.casefold()
+            components = [
+                item
+                for item in components
+                if str(item.get("qualified_type") or item.get("type", "")).casefold()
+                == expected_type
+            ]
+        if args.object:
+            expected_object = args.object.replace("\\", "/").strip("/").casefold()
+            components = [
+                item
+                for item in components
+                if str(item.get("object", "")).replace("\\", "/").strip("/").casefold()
+                == expected_object
+            ]
+        print(_format_unity_components(components, args.format))
+        return 0
+
     print(f"[error] Unknown Unity command: {args.unity_command}")
     return 1
 
@@ -953,6 +1176,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     print(f"[scan] Scanning {root}...")
     
     try:
+        config = load_config(root, args.config)
+        _prepare_editor_snapshot(root, config)
         orchestrator = Orchestrator(root, config_path=args.config)
         
         def progress(phase: str, current: int, total: int) -> None:
@@ -990,6 +1215,8 @@ def cmd_agents(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     print(f"[agents] Analyzing {root}...")
     try:
+        config = load_config(root, args.config)
+        _prepare_editor_snapshot(root, config)
         stored_summaries = load_summaries(root)
         updates: dict[str, str] = {}
         for assignment in args.summary:
@@ -1332,8 +1559,8 @@ def cmd_focus(args: argparse.Namespace) -> int:
     print(f"[focus] Generating context for {target_file}...")
     
     try:
+        from .focus import FocusConfig, compute_focus_context, generate_focus_markdown
         from .graph import build_graph_from_edges
-        from .focus import compute_focus_context, generate_focus_markdown, FocusConfig
         
         # Rebuild graph from manifest
         graph = build_graph_from_edges(
@@ -1416,7 +1643,7 @@ def cmd_optimize(args: argparse.Namespace) -> int:
     print(f"[optimize] Selecting optimal context within {args.budget:,} tokens...")
     
     try:
-        from .optimizer import optimize_context, format_optimization_result
+        from .optimizer import format_optimization_result, optimize_context
         
         # Run optimization
         result = optimize_context(

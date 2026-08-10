@@ -16,6 +16,10 @@ then adds the pieces a Unity coding agent needs:
   built-in and script components, ScriptableObject instances, persistent
   UnityEvents, prefab instances, Animator controllers, animation clips,
   materials, and serialized mesh assets.
+- A companion Unity Editor package for authoritative TextureImporter, Sprite
+  subasset/local-ID, Sprite Atlas, audio/video/font/terrain/static asset, and
+  `MonoScript.GetClass` component identity facts. It communicates only through
+  atomic files in `.better-context/`; no port or MCP server is opened.
 - Exact scene, prefab, ScriptableObject, controller, material, animation, and
   script relationships resolved through structured object references and Unity
   GUIDs. Roslyn confirms all C# types and callable UnityEvent targets.
@@ -36,9 +40,21 @@ edges instead of guessing from names.
 From this checkout:
 
 ```powershell
+uv run better-context-unity --root D:\Path\To\UnityProject editor install --revision v1.6.0
+uv run better-context-unity --root D:\Path\To\UnityProject editor sync --mode auto
 uv run better-context-unity --root D:\Path\To\UnityProject agents --dry-run
 uv run better-context-unity --root D:\Path\To\UnityProject agents
 ```
+
+The UPM dependency uses Unity's documented
+[Git subfolder syntax](https://docs.unity3d.com/2022.3/Documentation/Manual/upm-git.html)
+and should be pinned to a release tag or exact commit. `agents` reuses a fresh Editor snapshot and
+refreshes a stale one automatically. It asks the already-open Editor first; if
+the project is closed, it runs the exact version declared by
+`ProjectSettings/ProjectVersion.txt` in batch mode. When the bridge or matching
+Editor is unavailable, analysis continues offline with an explicit coverage
+warning unless `unity_editor_required` is enabled. Stale Editor data is never
+merged into the manifest.
 
 Roslyn-derived responsibilities are limited to facts verified in code: declared
 types, Unity base classes, documented summaries, and exposed members. When an AI
@@ -143,8 +159,10 @@ anchors, named dependencies and dependents, Ca/Ce/I/A/D coupling metrics,
 function calls, and exact Unity serialized references. `.meta` sidecars are
 hidden from file tables and can never be C# dependency targets. Parsed FBX,
 animation, material, and mesh facts may be shown in the nearest bounded art map.
-Textures, audio, video, unsupported models, and other low-signal assets receive
-path-only navigation without an invented code-like responsibility. Art maps stop
+Pure art and other low-signal assets receive path-only navigation without an
+invented code-like responsibility. Sprite sheets, platform overrides,
+non-default importers, or assets with verified runtime references may receive a
+bounded detail row. Art maps stop
 at `Assets/<group>/<child>`; deeper paths are folded into the nearest map and
 each table is capped. Vendor/generated trees still stop at a clearly labeled
 boundary. Regeneration safely removes only stale managed blocks below collapsed
@@ -158,13 +176,35 @@ can be queried without regenerating context:
 better-context-unity --root D:\Path\To\UnityProject unity list --kind prefab --format human
 better-context-unity --root D:\Path\To\UnityProject unity show Assets/UI/Shop.prefab --depth 3
 better-context-unity --root D:\Path\To\UnityProject unity show Assets/Characters/Hero.fbx --depth 2
+better-context-unity --root D:\Path\To\UnityProject unity show Assets/UI/BuffIcon.png
 better-context-unity --root D:\Path\To\UnityProject unity bindings --type ShopView --method Buy
+better-context-unity --root D:\Path\To\UnityProject unity components --asset Assets/UI/Shop.prefab --type UnityEngine.UI.Image
 ```
 
 `unity list` defaults to 50 assets. `unity show` defaults to hierarchy depth 2;
 use `--depth -1` for the full hierarchy. Binding filters use exact,
 case-insensitive asset/type/method matching. These read-only commands require a
 fresh manifest and print an `agents` refresh hint when it is missing or stale.
+`unity show` retains full importer, platform override, hidden subasset, Sprite
+local ID/rect/pivot/border/PPU, and selected component facts on demand; pixel,
+thumbnail, and base64 image data are never stored.
+
+### Unity Editor asset and component intelligence
+
+The companion package exports Unity-authoritative facts with
+[`AssetDatabase.LoadAllAssetsAtPath`](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/AssetDatabase.LoadAllAssetsAtPath.html),
+[`TextureImporter`](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/TextureImporter.html), other available
+importers, and `MonoScript.GetClass`. Scene and prefab hierarchy still comes
+from the structured YAML parser: the bridge does not open, modify, or save a
+scene. Built-in and package UI components such as `Image`, `Button`, layout
+groups, TMP, physics, rendering, audio, navigation, particles, and directors
+receive bounded field/reference summaries. Unknown components receive at most
+12 scalar/vector/color/reference fields and no inferred responsibility.
+
+Direct `AssetDatabase.GetDependencies(path, false)` results may become graph
+edges. Self edges, `.meta`, cache, and generated paths are rejected; Sprite
+references remain file-level edges whose evidence records the exact Sprite
+name, local ID, and Sprite ID.
 
 ### FBX model intelligence
 
@@ -192,9 +232,13 @@ surface and Autodesk's documented [FBX scene graph](https://help.autodesk.com/cl
 | `tree` | Show a compact directory summary |
 | `file <path>` | Extract types, methods, imports, and exports |
 | `deps <path>` | Show named dependencies/dependents with resolved symbols and lines |
-| `unity list` | List analyzed scenes, prefabs, ScriptableObjects, Animator assets, clips, materials, meshes, and FBX models |
+| `editor install` | Pin the companion UPM package by Git revision |
+| `editor status` | Report package, exact Unity executable, and snapshot freshness |
+| `editor sync` | Refresh Editor facts through an open Editor or exact-version batch process |
+| `unity list` | List runtime, model, texture, Sprite Atlas, shader, audio, video, and other static Unity assets |
 | `unity show <path>` | Show full GameObject/component/model/runtime data for one Unity asset |
 | `unity bindings` | Query persistent UnityEvent bindings by asset, target type, or method |
+| `unity components` | Query exact component types, selected fields, and named references |
 | `stats` | Show manifest and PageRank statistics |
 | `focus <path>` | Build context around a known file |
 | `graph [--kind dependency\|call]` | Export dependency or function-call graph as Mermaid, DOT, or JSON |
@@ -221,13 +265,20 @@ Optional `.ctx.json`:
   "pagerank_iterations": 20,
   "unity_asset_scope": "project-owned",
   "unity_agents_asset_limit": 12,
-  "unity_agents_object_limit": 8
+  "unity_agents_object_limit": 8,
+  "unity_editor_mode": "auto",
+  "unity_editor_required": false,
+  "unity_editor_timeout_seconds": 300,
+  "unity_editor_path": null
 }
 ```
 
 `unity_asset_scope` accepts `project-owned` (default) or `all`. The two positive
 limits cap Unity asset and object previews in generated `AGENTS.md`; they do not
 discard full manifest data. `.ctxignore` still takes precedence over the scope.
+`unity_editor_mode` accepts `auto`, `open`, `batch`, or `offline`. A configured
+`unity_editor_path` and `UNITY_EDITOR_PATH` are accepted only when they match the
+project's exact Unity version; otherwise Unity Hub's matching install is used.
 
 Optional `.ctxignore` uses gitignore-like patterns and extends the built-in
 Unity ignores:

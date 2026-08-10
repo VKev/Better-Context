@@ -13,10 +13,9 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Callable
+from typing import Callable, List, Optional
 
 from .ignore import load_ignore_patterns, should_ignore, should_ignore_dir
-
 
 # Known binary file extensions (skip without reading)
 BINARY_EXTENSIONS: frozenset[str] = frozenset({
@@ -61,7 +60,35 @@ UNITY_STREAMED_ASSET_EXTENSIONS: frozenset[str] = frozenset(
     }
 )
 
-INDEXED_BINARY_EXTENSIONS: frozenset[str] = frozenset({".fbx"})
+INDEXED_BINARY_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".aif",
+        ".aiff",
+        ".avi",
+        ".bmp",
+        ".exr",
+        ".fbx",
+        ".flac",
+        ".gif",
+        ".hdr",
+        ".jpeg",
+        ".jpg",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".ogg",
+        ".otf",
+        ".png",
+        ".psd",
+        ".svg",
+        ".tga",
+        ".tif",
+        ".tiff",
+        ".ttf",
+        ".wav",
+        ".webm",
+    }
+)
 
 @dataclass
 class FileInfo:
@@ -363,7 +390,10 @@ def walk_repository(
                     pass
             
             # Compute hash
-            content_hash = compute_file_hash(abs_path, -1 if indexed_binary else 65536)
+            content_hash = compute_file_hash(
+                abs_path,
+                -1 if abs_path.suffix.lower() == ".fbx" else 65536,
+            )
             
             # Add to inventory
             inventory.files.append(FileInfo(

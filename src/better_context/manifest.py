@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 # Schema version - bump on breaking changes
-MANIFEST_VERSION = "1.2.0"
-PACKAGE_VERSION_FALLBACK = "1.5.0"
+MANIFEST_VERSION = "1.3.0"
+PACKAGE_VERSION_FALLBACK = "1.6.0"
 
 
 def generator_version() -> str:

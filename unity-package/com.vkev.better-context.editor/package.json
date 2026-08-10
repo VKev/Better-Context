@@ -1,0 +1,10 @@
+{
+  "name": "com.vkev.better-context.editor",
+  "version": "1.6.0",
+  "displayName": "Better Context Editor Bridge",
+  "description": "Exports Unity-authoritative importer, subasset, and MonoScript facts for Better Context.",
+  "unity": "2022.3",
+  "author": {
+    "name": "VKev"
+  }
+}

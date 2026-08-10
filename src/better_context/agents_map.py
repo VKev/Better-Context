@@ -21,14 +21,50 @@ END = "<!-- better-context-unity:end -->"
 MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTALL)
 UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
 UNITY_RUNTIME_SUFFIXES = {
+    ".aif",
+    ".aiff",
     ".anim",
     ".asset",
+    ".avi",
+    ".bmp",
     ".controller",
+    ".cubemap",
+    ".exr",
     ".fbx",
+    ".flac",
+    ".gif",
+    ".hdr",
+    ".jpeg",
+    ".jpg",
+    ".lighting",
     ".mat",
+    ".mixer",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".ogg",
+    ".otf",
     ".overridecontroller",
+    ".physicsmaterial2d",
+    ".physicmaterial",
+    ".playable",
+    ".png",
     ".prefab",
+    ".psd",
+    ".rendertexture",
+    ".shader",
+    ".shadergraph",
+    ".shadersubgraph",
+    ".spriteatlas",
+    ".svg",
+    ".terrainlayer",
+    ".tga",
+    ".tif",
+    ".tiff",
+    ".ttf",
     ".unity",
+    ".wav",
+    ".webm",
 }
 UNITY_ASSET_PATH_SUFFIXES = UNITY_RUNTIME_SUFFIXES | {
     ".3ds",
@@ -423,6 +459,12 @@ def _runtime_kind_label(detail: Mapping[str, Any]) -> str:
         "material": "Material",
         "mesh": "Mesh",
         "model": "FBX Model",
+        "texture": "Texture / Sprite",
+        "sprite_atlas": "Sprite Atlas",
+        "shader": "Shader",
+        "audio_clip": "Audio Clip",
+        "video_clip": "Video Clip",
+        "font": "Font",
     }
     kind = str(detail.get("kind", "asset"))
     return labels.get(kind, kind.replace("_", " ").title())
@@ -605,6 +647,27 @@ def _runtime_asset_preview(detail: Mapping[str, Any], limit: int) -> str:
         if clips:
             items.append(
                 "Unity clips: " + ", ".join(f"`{value.get('name', '')}`" for value in clips[:2])
+            )
+    editor_asset = detail.get("editor_asset")
+    if isinstance(editor_asset, Mapping):
+        facts = editor_asset.get("facts", {})
+        if isinstance(facts, Mapping):
+            width = facts.get("source_width", facts.get("width"))
+            height = facts.get("source_height", facts.get("height"))
+            if width and height:
+                items.append(f"size: `{width}×{height}`")
+            if facts.get("pixels_per_unit"):
+                items.append(f"PPU: `{facts['pixels_per_unit']}`")
+            if facts.get("mipmaps"):
+                items.append(f"mipmaps: `{facts['mipmaps']}`")
+            if str(facts.get("platform.Android.overridden", "false")).casefold() == "true":
+                maximum = facts.get("platform.Android.max_texture_size", "?")
+                items.append(f"Android override: `max {maximum}`")
+        subassets = _runtime_list(editor_asset.get("subassets"))
+        if subassets:
+            items.append(
+                "subassets: "
+                + ", ".join(f"`{value.get('name', '')}`" for value in subassets[:3])
             )
 
     sources = [
@@ -815,9 +878,17 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
                 f"{metrics.get('materials', 0)} materials",
                 f"{metrics.get('meshes', 0)} meshes",
                 f"{metrics.get('models', 0)} FBX models",
+                f"{metrics.get('textures', 0)} textures",
+                f"{metrics.get('sprites', 0)} Sprite subassets",
+                f"{metrics.get('sprite_atlases', 0)} Sprite Atlases",
+                f"{metrics.get('shaders', 0)} shaders",
+                f"{metrics.get('audio_clips', 0)} audio clips",
+                f"{metrics.get('video_clips', 0)} video clips",
                 f"{metrics.get('game_objects', 0)} GameObjects",
                 f"{metrics.get('components', 0)} components",
-                f"{metrics.get('script_components', 0)} project-script usages",
+                f"{metrics.get('resolved_components', 0)} resolved components",
+                f"{metrics.get('project_script_usages', metrics.get('script_components', 0))} "
+                "project-script usages",
                 f"{metrics.get('unity_events', metrics.get('event_bindings', 0))} "
                 "UnityEvent bindings",
                 f"{metrics.get('animator_states', 0)} Animator states",
@@ -833,6 +904,25 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
         f"- Parse coverage: {parsed}/{candidates} candidate assets parsed; "
         f"{unsupported} unsupported serialization; {errors} parse errors."
     )
+    editor_value = runtime.get("editor_snapshot")
+    editor = editor_value if isinstance(editor_value, Mapping) else {}
+    editor_status = str(editor.get("status", "missing"))
+    if editor_status == "fresh":
+        editor_coverage = editor.get("coverage", {})
+        exported = (
+            editor_coverage.get("assets_exported", 0)
+            if isinstance(editor_coverage, Mapping)
+            else 0
+        )
+        lines.append(
+            f"- Unity Editor snapshot: fresh via `{editor.get('mode', 'unknown')}`; "
+            f"{exported} importer/static asset record(s) exported."
+        )
+    else:
+        lines.append(
+            f"- Unity Editor snapshot: `{editor_status}`; importer, hidden subasset, and exact "
+            "package-component coverage may be incomplete."
+        )
 
     ranked = [
         (entry, detail)
@@ -874,6 +964,8 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
             "<project-relative-asset> [--depth 2|-1] [--format ...]`.",
             "- Find persistent calls: `better-context-unity unity bindings "
             "[--asset PATH] [--type TYPE] [--method METHOD] [--format ...]`.",
+            "- Inspect resolved components: `better-context-unity unity components "
+            "[--asset PATH] [--type TYPE] [--object PATH] [--format ...]`.",
             "",
         ]
     )

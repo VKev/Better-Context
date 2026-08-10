@@ -5,10 +5,10 @@ Loads settings from .ctx.json with sensible defaults and CLI override support.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import json
 
 
 @dataclass
@@ -37,6 +37,10 @@ class Config:
     unity_asset_scope: str = "project-owned"
     unity_agents_asset_limit: int = 12
     unity_agents_object_limit: int = 8
+    unity_editor_mode: str = "auto"
+    unity_editor_required: bool = False
+    unity_editor_timeout_seconds: int = 300
+    unity_editor_path: str | None = None
 
     # Languages
     language_overrides: dict[str, str] = field(default_factory=dict)
@@ -142,5 +146,21 @@ def validate_config(config: Config) -> list[str]:
         or config.unity_agents_object_limit <= 0
     ):
         errors.append("unity_agents_object_limit must be a positive integer")
+
+    if config.unity_editor_mode not in {"auto", "open", "batch", "offline"}:
+        errors.append("unity_editor_mode must be 'auto', 'open', 'batch', or 'offline'")
+
+    if not isinstance(config.unity_editor_required, bool):
+        errors.append("unity_editor_required must be a boolean")
+
+    if (
+        not isinstance(config.unity_editor_timeout_seconds, int)
+        or isinstance(config.unity_editor_timeout_seconds, bool)
+        or config.unity_editor_timeout_seconds <= 0
+    ):
+        errors.append("unity_editor_timeout_seconds must be a positive integer")
+
+    if config.unity_editor_path is not None and not isinstance(config.unity_editor_path, str):
+        errors.append("unity_editor_path must be a string or null")
 
     return errors

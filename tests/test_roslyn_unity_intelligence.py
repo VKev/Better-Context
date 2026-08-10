@@ -208,7 +208,11 @@ def test_unity_guid_edges_and_rich_agents_map(semantic_unity_project: Path):
     assert "No project test file was detected" in root_map
     assert (semantic_unity_project / "Assets" / "Plugins" / "AGENTS.md").is_file()
     assert not (semantic_unity_project / "Assets" / "Plugins" / "UniRx" / "AGENTS.md").exists()
-    assert not (semantic_unity_project / "Assets" / "Art" / "Icons" / "AGENTS.md").exists()
+    art_map = (
+        semantic_unity_project / "Assets" / "Art" / "Icons" / "AGENTS.md"
+    ).read_text(encoding="utf-8")
+    assert "Path-only navigation" in art_map
+    assert "Unity runtime assets" not in art_map
     prefab_map = (
         semantic_unity_project / "Assets" / "Prefabs" / "AGENTS.md"
     ).read_text(encoding="utf-8")

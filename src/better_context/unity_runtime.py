@@ -19,13 +19,67 @@ from .fbx_runtime import inspect_fbx
 from .unity_intelligence import classify_ownership
 
 _ASSET_SUFFIXES = {
+    ".aif",
+    ".aiff",
+    ".anim",
+    ".asset",
+    ".avi",
+    ".bmp",
+    ".controller",
+    ".cubemap",
+    ".exr",
+    ".fbx",
+    ".flac",
+    ".gif",
+    ".hdr",
+    ".jpeg",
+    ".jpg",
+    ".lighting",
+    ".mat",
+    ".mixer",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".ogg",
+    ".otf",
+    ".overridecontroller",
+    ".physicsmaterial2d",
+    ".physicmaterial",
+    ".playable",
+    ".png",
+    ".prefab",
+    ".psd",
+    ".rendertexture",
+    ".shader",
+    ".shadergraph",
+    ".shadersubgraph",
+    ".spriteatlas",
+    ".svg",
+    ".terrainlayer",
+    ".tga",
+    ".tif",
+    ".tiff",
+    ".ttf",
+    ".unity",
+    ".wav",
+    ".webm",
+}
+_YAML_SUFFIXES = {
     ".anim",
     ".asset",
     ".controller",
-    ".fbx",
+    ".cubemap",
+    ".lighting",
     ".mat",
+    ".mixer",
     ".overridecontroller",
+    ".physicsmaterial2d",
+    ".physicmaterial",
+    ".playable",
     ".prefab",
+    ".rendertexture",
+    ".spriteatlas",
+    ".terrainlayer",
     ".unity",
 }
 _DOCUMENT_HEADER = re.compile(
@@ -33,9 +87,11 @@ _DOCUMENT_HEADER = re.compile(
     r"(?P<stripped>\s+stripped)?\s*$"
 )
 _TYPE_LINE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*):\s*$")
-_FIELD = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z_][A-Za-z0-9_]*):\s*(?P<value>.*)$")
+_FIELD = re.compile(
+    r"^(?P<indent>\s*)(?P<key>[A-Za-z_][A-Za-z0-9_ ]*):\s*(?P<value>.*)$"
+)
 _LIST_FIELD = re.compile(
-    r"^(?P<indent>\s*)-\s+(?P<key>[A-Za-z_][A-Za-z0-9_]*):\s*(?P<value>.*)$"
+    r"^(?P<indent>\s*)-\s+(?P<key>[A-Za-z_][A-Za-z0-9_ ]*):\s*(?P<value>.*)$"
 )
 _BARE_LIST = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>\{.*\})\s*$")
 _BARE_LIST_START = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>\{.*)$")
@@ -58,6 +114,107 @@ _CLASS_NAMES = {
     224: "RectTransform",
 }
 _ANIMATOR_PARAMETER_TYPES = {1: "float", 3: "int", 4: "bool", 9: "trigger"}
+_COMPONENT_FIELDS: dict[str, tuple[str, ...]] = {
+    "Transform": ("m_LocalPosition", "m_LocalRotation", "m_LocalScale"),
+    "RectTransform": (
+        "m_AnchorMin",
+        "m_AnchorMax",
+        "m_AnchoredPosition",
+        "m_SizeDelta",
+        "m_Pivot",
+    ),
+    "MeshFilter": ("m_Mesh",),
+    "MeshRenderer": ("m_Enabled", "m_CastShadows", "m_ReceiveShadows", "m_Materials"),
+    "SkinnedMeshRenderer": (
+        "m_Enabled",
+        "m_Mesh",
+        "m_RootBone",
+        "m_Materials",
+        "m_UpdateWhenOffscreen",
+    ),
+    "LODGroup": ("m_Enabled", "m_Size", "m_LocalReferencePoint", "m_FadeMode"),
+    "Rigidbody": ("m_Mass", "m_Drag", "m_AngularDrag", "m_UseGravity", "m_IsKinematic"),
+    "Rigidbody2D": ("m_BodyType", "m_Mass", "m_LinearDrag", "m_GravityScale"),
+    "BoxCollider": ("m_Enabled", "m_IsTrigger", "m_Material", "m_Center", "m_Size"),
+    "SphereCollider": ("m_Enabled", "m_IsTrigger", "m_Material", "m_Center", "m_Radius"),
+    "CapsuleCollider": (
+        "m_Enabled",
+        "m_IsTrigger",
+        "m_Material",
+        "m_Center",
+        "m_Radius",
+        "m_Height",
+        "m_Direction",
+    ),
+    "MeshCollider": ("m_Enabled", "m_IsTrigger", "m_Material", "m_Convex", "m_Mesh"),
+    "Animator": ("m_Enabled", "m_Avatar", "m_Controller", "m_CullingMode", "m_UpdateMode"),
+    "Animation": ("m_Enabled", "m_Animation", "m_WrapMode", "m_PlayAutomatically"),
+    "NavMeshAgent": ("m_Enabled", "m_Radius", "m_Speed", "m_Acceleration", "m_StoppingDistance"),
+    "NavMeshObstacle": ("m_Enabled", "m_Shape", "m_Carving", "m_Size", "m_Center"),
+    "Camera": ("m_Enabled", "m_ClearFlags", "near clip plane", "far clip plane", "field of view"),
+    "Light": ("m_Enabled", "m_Type", "m_Color", "m_Intensity", "m_Range", "m_SpotAngle"),
+    "ReflectionProbe": ("m_Enabled", "m_Type", "m_Mode", "m_Importance", "m_BoxSize"),
+    "AudioSource": (
+        "m_Enabled",
+        "m_audioClip",
+        "m_PlayOnAwake",
+        "m_Volume",
+        "m_Loop",
+        "m_SpatialBlend",
+    ),
+    "ParticleSystem": ("m_Enabled", "lengthInSec", "simulationSpeed", "looping", "playOnAwake"),
+    "Canvas": ("m_Enabled", "m_RenderMode", "m_Camera", "m_PlaneDistance", "m_SortingOrder"),
+    "CanvasGroup": ("m_Enabled", "m_Alpha", "m_Interactable", "m_BlocksRaycasts"),
+    "Image": ("m_Enabled", "m_Sprite", "m_Type", "m_PreserveAspect", "m_FillMethod", "m_Color"),
+    "RawImage": ("m_Enabled", "m_Texture", "m_UVRect", "m_Color"),
+    "Button": ("m_Enabled", "m_Interactable", "m_Transition", "m_TargetGraphic", "m_OnClick"),
+    "Selectable": ("m_Enabled", "m_Interactable", "m_Transition", "m_TargetGraphic"),
+    "Text": ("m_Enabled", "m_Text", "m_FontData", "m_Color"),
+    "TMP_Text": (
+        "m_Enabled",
+        "m_text",
+        "m_fontAsset",
+        "m_fontSize",
+        "m_color",
+        "m_enableWordWrapping",
+    ),
+    "TextMeshProUGUI": ("m_Enabled", "m_text", "m_fontAsset", "m_fontSize", "m_color"),
+    "LayoutGroup": ("m_Enabled", "m_Padding", "m_ChildAlignment", "m_Spacing"),
+    "HorizontalLayoutGroup": ("m_Enabled", "m_Padding", "m_ChildAlignment", "m_Spacing"),
+    "VerticalLayoutGroup": ("m_Enabled", "m_Padding", "m_ChildAlignment", "m_Spacing"),
+    "GridLayoutGroup": (
+        "m_Enabled",
+        "m_CellSize",
+        "m_Spacing",
+        "m_Constraint",
+        "m_ConstraintCount",
+    ),
+    "ScrollRect": ("m_Enabled", "m_Content", "m_Viewport", "m_Horizontal", "m_Vertical"),
+    "Slider": (
+        "m_Enabled",
+        "m_MinValue",
+        "m_MaxValue",
+        "m_Value",
+        "m_WholeNumbers",
+        "m_OnValueChanged",
+    ),
+    "Toggle": ("m_Enabled", "m_IsOn", "m_Graphic", "m_Group", "onValueChanged"),
+    "PlayableDirector": (
+        "m_Enabled",
+        "m_PlayableAsset",
+        "m_InitialState",
+        "m_WrapMode",
+        "m_DirectorUpdateMode",
+    ),
+}
+_GENERIC_COMPONENT_SKIP_FIELDS = {
+    "m_CorrespondingSourceObject",
+    "m_GameObject",
+    "m_ObjectHideFlags",
+    "m_PrefabAsset",
+    "m_PrefabInstance",
+    "m_Script",
+}
 
 
 @dataclass
@@ -85,6 +242,7 @@ def analyze_unity_runtime(
     inventory: Any,
     file_entries: Iterable[Any],
     scope: str = "project-owned",
+    editor_snapshot: dict[str, Any] | None = None,
 ) -> UnityRuntimeAnalysis:
     """Analyze serialized Unity runtime assets using exact GUID and Roslyn evidence.
 
@@ -110,6 +268,29 @@ def analyze_unity_runtime(
             if PurePosixPath(path).suffix.lower() in _ASSET_SUFFIXES:
                 inventory_by_path.setdefault(path, None)
     guid_to_assets = _build_guid_index(inventory_by_path)
+    editor_assets = (
+        editor_snapshot.get("assets_by_path", {})
+        if isinstance(editor_snapshot, dict)
+        else {}
+    )
+    editor_scripts = (
+        editor_snapshot.get("scripts_by_guid", {})
+        if isinstance(editor_snapshot, dict)
+        else {}
+    )
+    for editor_path, editor_asset in editor_assets.items():
+        if not isinstance(editor_asset, dict):
+            continue
+        guid = str(editor_asset.get("guid", "")).lower()
+        if _GUID.fullmatch(guid):
+            guid_to_assets.setdefault(guid, []).append(_normalize(editor_path))
+    for guid, script in editor_scripts.items():
+        path = _normalize(str(script.get("path", ""))) if isinstance(script, dict) else ""
+        if path and _GUID.fullmatch(guid):
+            guid_to_assets.setdefault(guid, []).append(path)
+    guid_to_assets = {
+        guid: sorted(set(paths)) for guid, paths in guid_to_assets.items()
+    }
     script_symbols = _build_script_symbol_index(entries_by_path)
 
     analysis = UnityRuntimeAnalysis()
@@ -134,6 +315,9 @@ def analyze_unity_runtime(
             script_symbols,
             entries_by_path,
             analysis,
+            editor_assets.get(path),
+            editor_scripts,
+            editor_snapshot or {},
         )
         analysis.assets[path] = asset
 
@@ -159,6 +343,9 @@ def _analyze_asset(
     script_symbols: dict[str, dict[str, Any]],
     entries_by_path: dict[str, Any],
     analysis: UnityRuntimeAnalysis,
+    editor_asset: dict[str, Any] | None,
+    editor_scripts: dict[str, dict[str, Any]],
+    editor_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     base: dict[str, Any] = {
         "path": path,
@@ -177,8 +364,12 @@ def _analyze_asset(
         "object_count": 0,
         "component_count": 0,
         "script_component_count": 0,
+        "project_script_component_count": 0,
     }
     absolute = getattr(inventory_entry, "absolute_path", root / Path(path))
+    suffix = PurePosixPath(path).suffix.lower()
+    if editor_asset is not None and suffix not in _YAML_SUFFIXES and suffix != ".fbx":
+        return _analyze_editor_asset(base, editor_asset, guid_to_assets, analysis)
     if PurePosixPath(path).suffix.lower() == ".fbx":
         return _analyze_fbx_asset(
             base,
@@ -226,8 +417,16 @@ def _analyze_asset(
     docs = {document.file_id: document for document in documents}
     object_context = _build_object_hierarchy(documents)
     base.update(object_context)
-    _resolve_components(base, documents, docs, guid_to_assets, script_symbols)
-    _collect_structured_references(base, documents, guid_to_assets)
+    _resolve_components(
+        base,
+        documents,
+        docs,
+        guid_to_assets,
+        script_symbols,
+        editor_scripts,
+        editor_snapshot,
+    )
+    _collect_structured_references(base, documents, guid_to_assets, editor_snapshot)
     _collect_serialized_asset_semantics(base, documents)
     _collect_prefab_instances(base, documents, guid_to_assets)
     _collect_events(
@@ -240,10 +439,22 @@ def _analyze_asset(
         entries_by_path,
         analysis,
     )
-    _collect_animator(base, documents, docs, guid_to_assets, script_symbols)
+    _collect_animator(
+        base,
+        documents,
+        docs,
+        guid_to_assets,
+        script_symbols,
+        editor_scripts,
+    )
 
     if base["kind"] == "asset":
-        script = _scriptable_object_script(documents, guid_to_assets, script_symbols)
+        script = _scriptable_object_script(
+            documents,
+            guid_to_assets,
+            script_symbols,
+            editor_scripts,
+        )
         if script and script.get("unity_type") == "ScriptableObject":
             base["kind"] = "scriptable_object"
             base["script"] = script
@@ -253,6 +464,8 @@ def _analyze_asset(
                 "script_path": script.get("path", ""),
                 "confidence": script.get("confidence", "unresolved"),
             }
+    if editor_asset is not None:
+        _merge_editor_asset(base, editor_asset, guid_to_assets)
     base["script_types"] = _script_types(base)
     root_ids = set(base["roots"])
     base["root_objects"] = [
@@ -289,6 +502,115 @@ def _analyze_fbx_asset(
         base["responsibility"] = "FBX model; binary and ModelImporter data could not be inspected."
         base["high_signal"] = 0
         return base
+    _emit_edges(base, analysis)
+    base["responsibility"] = _responsibility(base)
+    base["high_signal"] = _high_signal(base)
+    return base
+
+
+def _editor_references(
+    source: str,
+    editor_asset: dict[str, Any],
+    guid_to_assets: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    for index, raw_target in enumerate(editor_asset.get("dependencies", []), start=1):
+        target = _normalize(str(raw_target))
+        if (
+            not target
+            or target == source
+            or target.endswith(".meta")
+            or target.startswith(("Library/", "Temp/", "obj/", ".better-context/"))
+        ):
+            continue
+        target_guid = ""
+        for guid, paths in guid_to_assets.items():
+            if target in paths:
+                target_guid = guid
+                break
+        references.append(
+            {
+                "document_file_id": "0",
+                "file_id": "0",
+                "guid": target_guid,
+                "field": "AssetDatabase.GetDependencies",
+                "line": index,
+                "target": target,
+                "confidence": "exact",
+                "reason": "asset_database_direct_dependency",
+                "edge_kind": "asset_database_direct",
+                "provenance": "unity-editor",
+            }
+        )
+    return references
+
+
+def _editor_has_non_default_importer(editor_asset: dict[str, Any]) -> bool:
+    facts = editor_asset.get("facts", {})
+    if not isinstance(facts, dict):
+        return False
+    if str(facts.get("readable", "false")).casefold() == "true":
+        return True
+    return any(
+        key.startswith("platform.")
+        and key.endswith(".overridden")
+        and str(value).casefold() == "true"
+        for key, value in facts.items()
+    )
+
+
+def _merge_editor_asset(
+    asset: dict[str, Any],
+    editor_asset: dict[str, Any],
+    guid_to_assets: dict[str, list[str]],
+) -> None:
+    editor_kind = str(editor_asset.get("kind", ""))
+    if editor_kind and asset.get("kind") not in {
+        "scene",
+        "prefab",
+        "scriptable_object",
+        "animator_controller",
+        "animation_clip",
+        "material",
+        "mesh",
+        "model",
+    }:
+        asset["kind"] = editor_kind
+    asset["editor_asset"] = {
+        **editor_asset,
+        "provenance": "unity-editor",
+        "confidence": "exact",
+    }
+    asset["non_default_importer"] = _editor_has_non_default_importer(editor_asset)
+    existing = {
+        (str(item.get("field", "")), str(item.get("target", "")))
+        for item in asset.get("references", [])
+    }
+    for reference in _editor_references(asset["path"], editor_asset, guid_to_assets):
+        key = (reference["field"], reference["target"])
+        if key not in existing:
+            asset.setdefault("references", []).append(reference)
+            existing.add(key)
+
+
+def _analyze_editor_asset(
+    base: dict[str, Any],
+    editor_asset: dict[str, Any],
+    guid_to_assets: dict[str, list[str]],
+    analysis: UnityRuntimeAnalysis,
+) -> dict[str, Any]:
+    base["kind"] = str(editor_asset.get("kind") or base["kind"])
+    base["editor_asset"] = {
+        **editor_asset,
+        "provenance": "unity-editor",
+        "confidence": "exact",
+    }
+    base["references"] = _editor_references(base["path"], editor_asset, guid_to_assets)
+    subassets = [
+        item for item in editor_asset.get("subassets", []) if isinstance(item, dict)
+    ]
+    base["subasset_count"] = len(subassets)
+    base["non_default_importer"] = _editor_has_non_default_importer(editor_asset)
     _emit_edges(base, analysis)
     base["responsibility"] = _responsibility(base)
     base["high_signal"] = _high_signal(base)
@@ -571,6 +893,8 @@ def _resolve_components(
     docs: dict[str, _Document],
     guid_to_assets: dict[str, list[str]],
     script_symbols: dict[str, dict[str, Any]],
+    editor_scripts: dict[str, dict[str, Any]],
+    editor_snapshot: dict[str, Any],
 ) -> None:
     object_by_id = {item["file_id"]: item for item in asset["objects"]}
     for item in asset["objects"]:
@@ -587,21 +911,14 @@ def _resolve_components(
                     }
                 )
                 continue
-            component = {
-                "file_id": component_id,
-                "class_id": document.class_id,
-                "type": document.type_name,
-                "confidence": "exact",
-                "stripped": document.stripped,
-            }
-            script_reference = _reference_for_field(document, "m_Script")
-            if document.type_name == "MonoBehaviour" and script_reference:
-                script = _resolve_script(script_reference, guid_to_assets, script_symbols)
-                component["script"] = script
-                component["type"] = script.get("type") or "MonoBehaviour"
-                component["confidence"] = script["confidence"]
-                if script["confidence"] == "exact":
-                    asset["script_component_count"] += 1
+            component = _component_fact(
+                asset,
+                document,
+                guid_to_assets,
+                script_symbols,
+                editor_scripts,
+                editor_snapshot,
+            )
             components.append(component)
         item["components"] = components
 
@@ -618,29 +935,177 @@ def _resolve_components(
         object_id = _local_reference(document, "m_GameObject")
         if object_id not in object_by_id:
             continue
-        component = {
-            "file_id": document.file_id,
-            "class_id": document.class_id,
-            "type": document.type_name,
-            "confidence": "partial" if document.stripped else "exact",
-            "stripped": document.stripped,
-        }
-        script_reference = _reference_for_field(document, "m_Script")
-        if document.type_name == "MonoBehaviour" and script_reference:
-            script = _resolve_script(script_reference, guid_to_assets, script_symbols)
-            component["script"] = script
-            component["type"] = script.get("type") or "MonoBehaviour"
-            component["confidence"] = script["confidence"]
-            if script["confidence"] == "exact":
-                asset["script_component_count"] += 1
+        component = _component_fact(
+            asset,
+            document,
+            guid_to_assets,
+            script_symbols,
+            editor_scripts,
+            editor_snapshot,
+        )
+        if document.stripped and component["confidence"] == "exact":
+            component["confidence"] = "partial"
         object_by_id[object_id]["components"].append(component)
         asset["component_count"] += 1
+
+
+def _component_fact(
+    asset: dict[str, Any],
+    document: _Document,
+    guid_to_assets: dict[str, list[str]],
+    script_symbols: dict[str, dict[str, Any]],
+    editor_scripts: dict[str, dict[str, Any]],
+    editor_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    component: dict[str, Any] = {
+        "file_id": document.file_id,
+        "class_id": document.class_id,
+        "type": document.type_name,
+        "qualified_type": f"UnityEngine.{document.type_name}",
+        "assembly": "UnityEngine",
+        "boundary": "builtin",
+        "confidence": "exact",
+        "provenance": "unity-yaml-class",
+        "stripped": document.stripped,
+        "fields": {},
+        "references": [],
+    }
+    script_reference = _reference_for_field(document, "m_Script")
+    if document.type_name == "MonoBehaviour" and script_reference:
+        script = _resolve_script(
+            script_reference,
+            guid_to_assets,
+            script_symbols,
+            editor_scripts,
+        )
+        component["script"] = script
+        component["type"] = script.get("type") or "MonoBehaviour"
+        component["qualified_type"] = script.get("qualified_name") or component["type"]
+        component["assembly"] = script.get("assembly", "")
+        component["boundary"] = script.get("boundary") or _ownership(
+            str(script.get("path", "")), None
+        )
+        component["confidence"] = script["confidence"]
+        component["provenance"] = (
+            "unity-editor-monoscript"
+            if script.get("reason") == "unity_editor_monoscript_get_class"
+            else "meta-guid-roslyn"
+        )
+        if script["confidence"] == "exact":
+            asset["script_component_count"] += 1
+            if component["boundary"] in {"project", "project-owned"}:
+                asset["project_script_component_count"] += 1
+
+    enabled = _scalar(document, "m_Enabled")
+    if enabled:
+        component["enabled"] = _as_bool(enabled, True)
+    short_type = str(component.get("type", "")).rsplit(".", 1)[-1]
+    selected = _COMPONENT_FIELDS.get(short_type)
+    if selected is None:
+        selected = _COMPONENT_FIELDS.get(document.type_name)
+    component["fields"] = _selected_component_fields(document, selected)
+    component["references"] = _component_references(
+        document,
+        guid_to_assets,
+        editor_snapshot,
+        selected,
+    )
+    return component
+
+
+def _selected_component_fields(
+    document: _Document,
+    selected: tuple[str, ...] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if selected is not None:
+        for name in selected:
+            value = _scalar(document, name)
+            if value and not _inline_reference(value):
+                result[name] = _typed_scalar(value)
+        return result
+
+    for _line_number, line in document.lines:
+        match = _FIELD.match(line)
+        if not match or len(match.group("indent")) != 2:
+            continue
+        name = match.group("key")
+        value = match.group("value").strip()
+        if (
+            name in _GENERIC_COMPONENT_SKIP_FIELDS
+            or not value
+            or _inline_reference(value)
+        ):
+            continue
+        result[name] = _typed_scalar(value)
+        if len(result) >= 12:
+            break
+    return result
+
+
+def _typed_scalar(value: str) -> Any:
+    value = _unquote(value)
+    if value in {"0", "1"}:
+        return bool(int(value))
+    number = _as_number(value)
+    return number if number is not None else value
+
+
+def _component_references(
+    document: _Document,
+    guid_to_assets: dict[str, list[str]],
+    editor_snapshot: dict[str, Any],
+    selected: tuple[str, ...] | None,
+) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    selected_set = set(selected or ())
+    subassets = editor_snapshot.get("subassets_by_identity", {})
+    for line, field_name, reference in _reference_fields(document):
+        if field_name in {"m_GameObject", "m_Script"}:
+            continue
+        if selected is not None and field_name not in selected_set:
+            continue
+        guid = reference.get("guid", "").lower()
+        file_id = reference.get("file_id", "0")
+        targets = guid_to_assets.get(guid, []) if guid else []
+        item: dict[str, Any] = {
+            "field": field_name,
+            "line": line,
+            "guid": guid,
+            "file_id": file_id,
+            "confidence": "exact" if len(targets) == 1 else "unresolved",
+            "provenance": "unity-yaml-object-reference",
+        }
+        if len(targets) == 1:
+            item["target"] = targets[0]
+            identity = f"{guid}:{file_id}"
+            subasset = subassets.get(identity) if isinstance(subassets, dict) else None
+            if isinstance(subasset, dict):
+                item["subasset"] = {
+                    "name": subasset.get("name", ""),
+                    "type": subasset.get("type_name", ""),
+                    "local_id": subasset.get("local_id", file_id),
+                    "sprite_id": subasset.get("sprite_id", ""),
+                }
+        elif not guid and file_id != "0":
+            item["confidence"] = "exact"
+            item["target"] = f"local-fileID:{file_id}"
+        elif len(targets) > 1:
+            item["reason"] = "duplicate_guid"
+            item["candidates"] = targets
+        else:
+            item["reason"] = "guid_not_in_inventory"
+        references.append(item)
+        if selected is None and len(references) >= 12:
+            break
+    return references
 
 
 def _collect_structured_references(
     asset: dict[str, Any],
     documents: list[_Document],
     guid_to_assets: dict[str, list[str]],
+    editor_snapshot: dict[str, Any] | None = None,
 ) -> None:
     references = []
     for document in documents:
@@ -661,19 +1126,28 @@ def _collect_structured_references(
                 confidence = "unresolved"
                 target = ""
                 reason = "guid_not_in_inventory"
-            references.append(
-                {
-                    "document_file_id": document.file_id,
-                    "field": field_name,
-                    "file_id": reference.get("file_id", "0"),
-                    "guid": guid,
-                    "target": target,
-                    "candidates": targets if len(targets) > 1 else [],
-                    "confidence": confidence,
-                    "reason": reason,
-                    "line": line,
+            item: dict[str, Any] = {
+                "document_file_id": document.file_id,
+                "field": field_name,
+                "file_id": reference.get("file_id", "0"),
+                "guid": guid,
+                "target": target,
+                "candidates": targets if len(targets) > 1 else [],
+                "confidence": confidence,
+                "reason": reason,
+                "line": line,
+            }
+            subassets = (editor_snapshot or {}).get("subassets_by_identity", {})
+            identity = f"{guid}:{reference.get('file_id', '0')}"
+            subasset = subassets.get(identity) if isinstance(subassets, dict) else None
+            if isinstance(subasset, dict):
+                item["subasset"] = {
+                    "name": subasset.get("name", ""),
+                    "type": subasset.get("type_name", ""),
+                    "local_id": subasset.get("local_id", reference.get("file_id", "0")),
+                    "sprite_id": subasset.get("sprite_id", ""),
                 }
-            )
+            references.append(item)
     asset["references"] = references
 
 
@@ -859,6 +1333,7 @@ def _collect_animator(
     docs: dict[str, _Document],
     guid_to_assets: dict[str, list[str]],
     script_symbols: dict[str, dict[str, Any]],
+    editor_scripts: dict[str, dict[str, Any]],
 ) -> None:
     if PurePosixPath(asset["path"]).suffix.lower() not in {".controller", ".overridecontroller"}:
         return
@@ -925,7 +1400,14 @@ def _collect_animator(
                 continue
             reference = _reference_for_field(behaviour_doc, "m_Script")
             if reference:
-                behaviours.append(_resolve_script(reference, guid_to_assets, script_symbols))
+                behaviours.append(
+                    _resolve_script(
+                        reference,
+                        guid_to_assets,
+                        script_symbols,
+                        editor_scripts,
+                    )
+                )
         state_items.append(
             {
                 "file_id": state_id,
@@ -998,7 +1480,7 @@ def _emit_edges(asset: dict[str, Any], analysis: UnityRuntimeAnalysis) -> None:
         target = reference.get("target", "")
         if reference.get("confidence") != "exact" or not target or target.endswith(".meta"):
             continue
-        kind = "serialized_guid"
+        kind = str(reference.get("edge_kind") or "serialized_guid")
         if reference["field"] == "m_Script":
             kind = "unity_component"
             if asset.get("kind") == "scriptable_object":
@@ -1025,6 +1507,8 @@ def _emit_edges(asset: dict[str, Any], analysis: UnityRuntimeAnalysis) -> None:
                         "field": reference["field"],
                         "line": reference["line"],
                         "reason": reference["reason"],
+                        "provenance": reference.get("provenance", "unity-yaml"),
+                        "subasset": reference.get("subasset"),
                     }
                 ],
             }
@@ -1080,6 +1564,7 @@ def _resolve_script(
     reference: dict[str, str],
     guid_to_assets: dict[str, list[str]],
     script_symbols: dict[str, dict[str, Any]],
+    editor_scripts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     guid = reference.get("guid", "").lower()
     result: dict[str, Any] = {
@@ -1099,17 +1584,18 @@ def _resolve_script(
         result["reason"] = "duplicate_guid"
         result["candidates"] = targets
         return result
+    editor_script = (editor_scripts or {}).get(guid)
     if not targets:
-        return result
+        return _editor_script_result(result, editor_script)
     path = targets[0]
     result["path"] = path
     if not path.endswith(".cs"):
         result["reason"] = "guid_target_is_not_csharp"
-        return result
+        return _editor_script_result(result, editor_script)
     symbols = script_symbols.get(path)
     if not symbols:
         result["reason"] = "missing_roslyn_file_entry"
-        return result
+        return _editor_script_result(result, editor_script)
     types = symbols["types"]
     if len(types) > 1:
         concrete = [
@@ -1128,7 +1614,7 @@ def _resolve_script(
             return result
     if not types:
         result["reason"] = "no_roslyn_unity_type"
-        return result
+        return _editor_script_result(result, editor_script)
     chunk = types[0]
     metadata = getattr(chunk, "metadata", {})
     result.update(
@@ -1143,6 +1629,30 @@ def _resolve_script(
                 if result["reason"] == "unique_concrete_roslyn_unity_type"
                 else "meta_guid_and_roslyn_type"
             ),
+        }
+    )
+    return result
+
+
+def _editor_script_result(
+    result: dict[str, Any],
+    editor_script: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(editor_script, dict) or not editor_script.get("resolved"):
+        return result
+    qualified = str(editor_script.get("qualified_type", ""))
+    if not qualified:
+        return result
+    result.update(
+        {
+            "path": _normalize(str(editor_script.get("path", result.get("path", "")))),
+            "type": qualified.rsplit(".", 1)[-1],
+            "qualified_name": qualified,
+            "unity_type": str(editor_script.get("base_type", "")).rsplit(".", 1)[-1],
+            "assembly": str(editor_script.get("assembly", "")),
+            "boundary": str(editor_script.get("boundary", "")),
+            "confidence": "exact",
+            "reason": "unity_editor_monoscript_get_class",
         }
     )
     return result
@@ -1194,6 +1704,7 @@ def _scriptable_object_script(
     documents: list[_Document],
     guid_to_assets: dict[str, list[str]],
     script_symbols: dict[str, dict[str, Any]],
+    editor_scripts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     for document in documents:
         game_object = _local_reference(document, "m_GameObject")
@@ -1201,7 +1712,12 @@ def _scriptable_object_script(
             continue
         reference = _reference_for_field(document, "m_Script")
         if reference:
-            return _resolve_script(reference, guid_to_assets, script_symbols)
+            return _resolve_script(
+                reference,
+                guid_to_assets,
+                script_symbols,
+                editor_scripts,
+            )
     return {}
 
 
@@ -1603,11 +2119,40 @@ def _build_summary(
             "material": "materials",
             "mesh": "meshes",
             "model": "models",
+            "texture": "textures",
+            "sprite_atlas": "sprite_atlases",
+            "shader": "shaders",
+            "cubemap": "cubemaps",
+            "render_texture": "render_textures",
+            "audio_clip": "audio_clips",
+            "video_clip": "video_clips",
+            "font": "fonts",
+            "terrain_data": "terrain_assets",
+            "terrain_layer": "terrain_assets",
+            "physic_material": "physics_assets",
+            "physics_material_2d": "physics_assets",
+            "audio_mixer": "audio_mixers",
+            "timeline": "timelines",
+            "lighting_settings": "lighting_settings",
+            "navmesh_data": "navmesh_assets",
         }.get(kind, "other_assets")
         metrics[plural] += 1
+        editor_asset = asset.get("editor_asset", {})
+        subassets = editor_asset.get("subassets", [])
+        metrics["sprites"] += sum(
+            1 for item in subassets if str(item.get("type_name", "")).endswith("Sprite")
+        )
+        if editor_asset:
+            metrics["editor_assets"] += 1
+        if asset.get("non_default_importer"):
+            metrics["non_default_importers"] += 1
         metrics["game_objects"] += asset.get("object_count", 0)
         metrics["components"] += asset.get("component_count", 0)
         metrics["script_components"] += asset.get("script_component_count", 0)
+        metrics["project_script_usages"] += asset.get(
+            "project_script_component_count",
+            asset.get("script_component_count", 0),
+        )
         event_count = len(asset.get("event_bindings", []))
         metrics["event_bindings"] += event_count
         metrics["unity_events"] += event_count
@@ -1622,6 +2167,10 @@ def _build_summary(
                 metrics["unresolved_references"] += 1
         for obj in asset.get("objects", []):
             for component in obj.get("components", []):
+                if component.get("confidence") == "exact":
+                    metrics["resolved_components"] += 1
+                if component.get("provenance") == "unity-editor-monoscript":
+                    metrics["editor_resolved_components"] += 1
                 script_path = component.get("script", {}).get("path", "")
                 if script_path:
                     script_usages[script_path].add(path)
@@ -1653,6 +2202,9 @@ def _build_summary(
                     "bone_count", 0
                 ),
                 "embedded_clip_count": len(asset.get("model_importer", {}).get("clips", [])),
+                "subasset_count": len(editor_asset.get("subassets", [])),
+                "non_default_importer": bool(asset.get("non_default_importer")),
+                "editor_type": editor_asset.get("type_name", ""),
             }
         )
     metrics["assets"] = len(assets)
@@ -1667,10 +2219,30 @@ def _build_summary(
         "materials",
         "meshes",
         "models",
+        "textures",
+        "sprites",
+        "sprite_atlases",
+        "shaders",
+        "cubemaps",
+        "render_textures",
+        "audio_clips",
+        "video_clips",
+        "fonts",
+        "terrain_assets",
+        "physics_assets",
+        "audio_mixers",
+        "timelines",
+        "lighting_settings",
+        "navmesh_assets",
+        "editor_assets",
+        "non_default_importers",
         "other_assets",
         "game_objects",
         "components",
         "script_components",
+        "project_script_usages",
+        "resolved_components",
+        "editor_resolved_components",
         "event_bindings",
         "unity_events",
         "animator_states",
@@ -1692,7 +2264,11 @@ def _build_summary(
     ):
         coverage.setdefault(key, 0)
     return {
-        "engine": "unity-yaml-fbx-stdlib",
+        "engine": (
+            "unity-yaml-fbx-editor"
+            if any(asset.get("editor_asset") for asset in assets.values())
+            else "unity-yaml-fbx-stdlib"
+        ),
         "coverage": dict(coverage),
         "metrics": dict(metrics),
         "assets": sorted(compact_assets, key=lambda item: item["path"]),
@@ -1808,6 +2384,41 @@ def _responsibility(asset: dict[str, Any]) -> str:
             f"{model.get('skeleton', {}).get('bone_count', 0)} bone(s), and "
             f"{len(clips)} Unity clip split(s); rig `{rig_name}`."
         )
+    if asset.get("kind") == "texture":
+        editor = asset.get("editor_asset", {})
+        facts = editor.get("facts", {})
+        subassets = editor.get("subassets", [])
+        dimensions = f"{facts.get('source_width', '?')}×{facts.get('source_height', '?')}"
+        if subassets:
+            names = [str(item.get("name", "")) for item in subassets[:4]]
+            suffix = "…" if len(subassets) > 4 else ""
+            return (
+                f"Texture `{PurePosixPath(asset['path']).name}` ({dimensions}) importing "
+                f"{len(subassets)} Sprite subasset(s): {', '.join(names)}{suffix}."
+            )
+        return f"Texture `{PurePosixPath(asset['path']).name}` imported at {dimensions}."
+    if asset.get("kind") == "sprite_atlas":
+        facts = asset.get("editor_asset", {}).get("facts", {})
+        return (
+            f"Sprite Atlas `{PurePosixPath(asset['path']).stem}` with "
+            f"{facts.get('packable_count', '?')} packable(s)."
+        )
+    if asset.get("kind") == "audio_clip":
+        facts = asset.get("editor_asset", {}).get("facts", {})
+        return (
+            f"Audio clip `{PurePosixPath(asset['path']).name}` using "
+            f"`{facts.get('load_type', 'unknown')}` loading and "
+            f"`{facts.get('compression_format', 'unknown')}` compression."
+        )
+    if asset.get("kind") == "video_clip":
+        facts = asset.get("editor_asset", {}).get("facts", {})
+        return (
+            f"Video clip `{PurePosixPath(asset['path']).name}` at "
+            f"{facts.get('width', '?')}×{facts.get('height', '?')}."
+        )
+    if asset.get("editor_asset"):
+        label = asset.get("kind", "asset").replace("_", " ").title()
+        return f"{label} `{PurePosixPath(asset['path']).name}` inspected by Unity Editor."
     animator = asset.get("animator", {})
     if animator:
         return (
@@ -1837,14 +2448,26 @@ def _high_signal(asset: dict[str, Any]) -> int:
         asset.get(key)
         for key in ("animation_clip", "material", "mesh", "model")
     )
+    editor_asset = asset.get("editor_asset", {})
+    subasset_count = len(editor_asset.get("subassets", []))
+    editor_signal = (
+        (3 if subasset_count > 1 else 0)
+        + (2 if asset.get("non_default_importer") else 0)
+        + (2 if asset.get("kind") == "sprite_atlas" else 0)
+    )
     return int(
-        asset.get("script_component_count", 0) * 3
+        asset.get(
+            "project_script_component_count",
+            asset.get("script_component_count", 0),
+        )
+        * 3
         + len(asset.get("unity_events", [])) * 5
         + len(animator.get("states", []))
         + len(animator.get("transitions", []))
         + len(animator.get("blend_trees", [])) * 2
         + (4 if asset.get("kind") == "scriptable_object" else 0)
         + (1 if semantic_art else 0)
+        + editor_signal
     )
 
 
@@ -1858,6 +2481,32 @@ def _kind_for_path(path: str) -> str:
         ".anim": "animation_clip",
         ".mat": "material",
         ".fbx": "model",
+        ".png": "texture",
+        ".jpg": "texture",
+        ".jpeg": "texture",
+        ".tga": "texture",
+        ".tif": "texture",
+        ".tiff": "texture",
+        ".psd": "texture",
+        ".exr": "texture",
+        ".hdr": "texture",
+        ".bmp": "texture",
+        ".spriteatlas": "sprite_atlas",
+        ".shader": "shader",
+        ".shadergraph": "shader",
+        ".shadersubgraph": "shader",
+        ".wav": "audio_clip",
+        ".mp3": "audio_clip",
+        ".ogg": "audio_clip",
+        ".aif": "audio_clip",
+        ".aiff": "audio_clip",
+        ".flac": "audio_clip",
+        ".mp4": "video_clip",
+        ".mov": "video_clip",
+        ".webm": "video_clip",
+        ".avi": "video_clip",
+        ".ttf": "font",
+        ".otf": "font",
     }.get(suffix, "asset")
 
 

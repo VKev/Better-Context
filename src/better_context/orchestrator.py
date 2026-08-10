@@ -21,25 +21,42 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
 
-from .config import Config, load_config
-from .scanner import walk_repository, FileInventory, FileInfo
-from .languages import detect_language, SUPPORTED_LANGUAGES
-from .chunker import parse_file as chunk_parse_file
-from .resolution import RawImport, resolve_all_imports, ResolutionResult
-from .graph import build_dependency_graph, DependencyGraph, get_graph_stats, detect_cycles, build_topological_layers
-from .centrality import calculate_pagerank, get_top_files, find_cycles as centrality_find_cycles
-from .manifest import (
-    Manifest, ManifestMeta, FileEntry, ChunkEntry, ImportEntry, ExportEntry,
-    GraphData, ParseError, create_manifest_meta, save_manifest, load_manifest,
-    MANIFEST_VERSION,
-)
 from .agents_map import generate_agents_map, load_summaries
-from .staleness import save_staleness_info
 from .architecture import analyze_architecture
+from .centrality import calculate_pagerank, get_top_files
+from .centrality import find_cycles as centrality_find_cycles
+from .chunker import parse_file as chunk_parse_file
+from .config import Config, load_config
 from .coupling import calculate_coupling_metrics
+from .graph import (
+    DependencyGraph,
+    build_dependency_graph,
+    build_topological_layers,
+    detect_cycles,
+    get_graph_stats,
+)
+from .languages import SUPPORTED_LANGUAGES, detect_language
+from .manifest import (
+    MANIFEST_VERSION,
+    ChunkEntry,
+    ExportEntry,
+    FileEntry,
+    GraphData,
+    ImportEntry,
+    Manifest,
+    ManifestMeta,
+    ParseError,
+    create_manifest_meta,
+    load_manifest,
+    save_manifest,
+)
+from .resolution import RawImport, ResolutionResult, resolve_all_imports
 from .roslyn import RoslynUnavailableError, analyze_csharp_project, discover_project_references
+from .scanner import FileInfo, FileInventory, walk_repository
+from .staleness import save_staleness_info
+from .unity_editor import get_editor_snapshot_status
 from .unity_intelligence import (
     classify_ownership,
     collect_project_facts,
@@ -360,7 +377,8 @@ class Orchestrator:
     def _scan_repository(self) -> FileInventory:
         """Scan repository and build file inventory."""
         def language_detector(path: Path) -> Optional[str]:
-            return detect_language(path, self.config)
+            detected = detect_language(path, self.config)
+            return str(detected) if detected is not None else None
         
         inventory = walk_repository(
             self.root,
@@ -520,6 +538,13 @@ class Orchestrator:
             graph.add_edge(detail["source"], detail["target"])
 
         if is_unity_project(self.root):
+            editor_status = get_editor_snapshot_status(self.root, self.config.output_dir)
+            editor_snapshot = (
+                editor_status.snapshot
+                if self.config.unity_editor_mode != "offline"
+                and editor_status.state == "fresh"
+                else None
+            )
             runtime_files = [
                 SimpleNamespace(
                     path=entry.path,
@@ -533,11 +558,31 @@ class Orchestrator:
                 inventory,
                 runtime_files,
                 scope=self.config.unity_asset_scope,
+                editor_snapshot=editor_snapshot,
             )
             self._unity_runtime.summary.setdefault("scope", self.config.unity_asset_scope)
             self._unity_runtime.summary["agents_limits"] = {
                 "assets": self.config.unity_agents_asset_limit,
                 "objects": self.config.unity_agents_object_limit,
+            }
+            self._unity_runtime.summary["editor_snapshot"] = {
+                "status": (
+                    "offline"
+                    if self.config.unity_editor_mode == "offline"
+                    else editor_status.state
+                ),
+                "message": (
+                    "Unity Editor enrichment is disabled by configuration."
+                    if self.config.unity_editor_mode == "offline"
+                    else editor_status.message
+                ),
+                "mode": editor_snapshot.get("mode") if editor_snapshot else None,
+                "unity_version": editor_snapshot.get("unity_version") if editor_snapshot else None,
+                "bridge_version": (
+                    editor_snapshot.get("bridge_version") if editor_snapshot else None
+                ),
+                "coverage": editor_snapshot.get("coverage", {}) if editor_snapshot else {},
+                "errors": editor_snapshot.get("errors", []) if editor_snapshot else [],
             }
             for asset_path, asset in self._unity_runtime.assets.items():
                 if asset.get("status") == "parsed":

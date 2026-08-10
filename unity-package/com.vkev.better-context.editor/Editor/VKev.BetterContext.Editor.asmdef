@@ -1,0 +1,16 @@
+{
+  "name": "VKev.BetterContext.Editor",
+  "rootNamespace": "VKev.BetterContext",
+  "references": [],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
