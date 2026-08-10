@@ -174,10 +174,18 @@ def compute_editor_source_hash(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path,
+    value: dict[str, Any],
+    *,
+    trailing_newline: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(value, indent=2), encoding="utf-8")
+    serialized = json.dumps(value, indent=2)
+    if trailing_newline:
+        serialized += "\n"
+    temporary.write_text(serialized, encoding="utf-8")
     os.replace(temporary, path)
 
 
@@ -503,6 +511,10 @@ def sync_editor_snapshot(
 def install_editor_package(root: Path, revision: str = "v1.6.0") -> tuple[bool, str]:
     """Pin the companion UPM package in Packages/manifest.json."""
     manifest_path = root / "Packages" / "manifest.json"
+    try:
+        original = manifest_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return False, f"Could not read {manifest_path}."
     value = _read_json(manifest_path)
     if value is None:
         return False, f"Could not read {manifest_path}."
@@ -516,9 +528,12 @@ def install_editor_package(root: Path, revision: str = "v1.6.0") -> tuple[bool, 
     if dependencies.get(EDITOR_PACKAGE_NAME) == package_url:
         return True, f"{EDITOR_PACKAGE_NAME} is already pinned to {revision}."
     dependencies[EDITOR_PACKAGE_NAME] = package_url
-    ordered = {key: dependencies[key] for key in sorted(dependencies)}
-    value["dependencies"] = ordered
-    _atomic_write_json(manifest_path, value)
+    value["dependencies"] = dependencies
+    _atomic_write_json(
+        manifest_path,
+        value,
+        trailing_newline=original.endswith(("\n", "\r")),
+    )
     return True, f"Pinned {EDITOR_PACKAGE_NAME} to {revision}."
 
 

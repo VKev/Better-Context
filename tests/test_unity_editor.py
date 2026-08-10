@@ -87,13 +87,24 @@ def test_snapshot_status_rejects_stale_and_normalizes_facts(tmp_path: Path) -> N
 
 def test_editor_install_pins_git_subfolder(tmp_path: Path) -> None:
     _unity_project(tmp_path)
+    manifest_path = tmp_path / "Packages" / "manifest.json"
+    manifest_path.write_text(
+        '{\n  "dependencies": {\n    "z.last": "1.0.0",\n'
+        '    "a.first": "1.0.0"\n  }\n}\n'
+    )
 
     success, _message = install_editor_package(tmp_path, "abc123")
 
     assert success
-    manifest = json.loads((tmp_path / "Packages" / "manifest.json").read_text())
+    installed_text = manifest_path.read_text()
+    manifest = json.loads(installed_text)
     assert manifest["dependencies"][EDITOR_PACKAGE_NAME].endswith(
         "?path=/unity-package/com.vkev.better-context.editor#abc123"
+    )
+    assert installed_text.endswith("\n")
+    assert installed_text.index('"z.last"') < installed_text.index('"a.first"')
+    assert installed_text.index('"a.first"') < installed_text.index(
+        f'"{EDITOR_PACKAGE_NAME}"'
     )
 
 
