@@ -33,6 +33,11 @@ class Config:
     pagerank_damping: float = 0.85
     pagerank_iterations: int = 20
 
+    # Unity runtime intelligence
+    unity_asset_scope: str = "project-owned"
+    unity_agents_asset_limit: int = 12
+    unity_agents_object_limit: int = 8
+
     # Languages
     language_overrides: dict[str, str] = field(default_factory=dict)
 
@@ -117,5 +122,25 @@ def validate_config(config: Config) -> list[str]:
 
     if config.chunk_max_lines < config.chunk_min_lines:
         errors.append("chunk_max_lines must be >= chunk_min_lines")
+
+    if not isinstance(config.unity_asset_scope, str) or config.unity_asset_scope not in {
+        "project-owned",
+        "all",
+    }:
+        errors.append("unity_asset_scope must be 'project-owned' or 'all'")
+
+    if (
+        not isinstance(config.unity_agents_asset_limit, int)
+        or isinstance(config.unity_agents_asset_limit, bool)
+        or config.unity_agents_asset_limit <= 0
+    ):
+        errors.append("unity_agents_asset_limit must be a positive integer")
+
+    if (
+        not isinstance(config.unity_agents_object_limit, int)
+        or isinstance(config.unity_agents_object_limit, bool)
+        or config.unity_agents_object_limit <= 0
+    ):
+        errors.append("unity_agents_object_limit must be a positive integer")
 
     return errors

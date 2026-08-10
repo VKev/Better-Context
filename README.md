@@ -12,8 +12,12 @@ then adds the pieces a Unity coding agent needs:
 - Symbol-resolved C# dependencies and function calls. Comments, strings,
   namespace names, `.meta` files, shader includes, and same-name collisions do
   not create C# file edges.
-- Exact scene, prefab, ScriptableObject, controller, material, and script
-  relationships resolved through Unity GUIDs.
+- Unity YAML runtime intelligence for scene/prefab GameObject hierarchies,
+  built-in and script components, ScriptableObject instances, persistent
+  UnityEvents, prefab instances, and Animator controllers.
+- Exact scene, prefab, ScriptableObject, controller, material, animation, and
+  script relationships resolved through structured object references and Unity
+  GUIDs. Roslyn confirms all C# types and callable UnityEvent targets.
 - Unity-generated directory ignores.
 - Safe hierarchical `AGENTS.md` maps with project facts, PageRank, public API,
   named dependencies/dependents, call flows, coupling metrics, inferred layers,
@@ -141,6 +145,21 @@ Low-signal media-only directories are not given their own maps, while vendor
 and generated trees stop at a clearly labeled boundary map. Regeneration safely
 removes only stale managed blocks left below those collapsed boundaries.
 
+Unity runtime asset summaries stay deliberately compact in `AGENTS.md`. The
+full object/component topology remains in `.better-context/manifest.json` and
+can be queried without regenerating context:
+
+```powershell
+better-context-unity --root D:\Path\To\UnityProject unity list --kind prefab --format human
+better-context-unity --root D:\Path\To\UnityProject unity show Assets/UI/Shop.prefab --depth 3
+better-context-unity --root D:\Path\To\UnityProject unity bindings --type ShopView --method Buy
+```
+
+`unity list` defaults to 50 assets. `unity show` defaults to hierarchy depth 2;
+use `--depth -1` for the full hierarchy. Binding filters use exact,
+case-insensitive asset/type/method matching. These read-only commands require a
+fresh manifest and print an `agents` refresh hint when it is missing or stale.
+
 ## Commands
 
 | Command | Purpose |
@@ -151,6 +170,9 @@ removes only stale managed blocks left below those collapsed boundaries.
 | `tree` | Show a compact directory summary |
 | `file <path>` | Extract types, methods, imports, and exports |
 | `deps <path>` | Show named dependencies/dependents with resolved symbols and lines |
+| `unity list` | List analyzed scene, prefab, ScriptableObject, and Animator assets |
+| `unity show <path>` | Show full GameObject/component/runtime data for one Unity asset |
+| `unity bindings` | Query persistent UnityEvent bindings by asset, target type, or method |
 | `stats` | Show manifest and PageRank statistics |
 | `focus <path>` | Build context around a known file |
 | `graph [--kind dependency\|call]` | Export dependency or function-call graph as Mermaid, DOT, or JSON |
@@ -174,9 +196,16 @@ Optional `.ctx.json`:
   "manifest_file": "manifest.json",
   "generate_agents_md": true,
   "pagerank_damping": 0.85,
-  "pagerank_iterations": 20
+  "pagerank_iterations": 20,
+  "unity_asset_scope": "project-owned",
+  "unity_agents_asset_limit": 12,
+  "unity_agents_object_limit": 8
 }
 ```
+
+`unity_asset_scope` accepts `project-owned` (default) or `all`. The two positive
+limits cap Unity asset and object previews in generated `AGENTS.md`; they do not
+discard full manifest data. `.ctxignore` still takes precedence over the scope.
 
 Optional `.ctxignore` uses gitignore-like patterns and extends the built-in
 Unity ignores:
@@ -205,3 +234,10 @@ uv run --extra dev mypy src
 The upstream repository is retained as the `upstream` Git remote. Add your own
 fork as `origin` before pushing. The project uses the MIT License; see
 [`LICENSE`](LICENSE).
+
+The UnityEvent, Animator, and Unity asset back-reference capabilities in
+[`pirua-game/ai_game_base_analysis_cli_mcp_tool`](https://github.com/pirua-game/ai_game_base_analysis_cli_mcp_tool)
+were used as prior-art capability references. Better Context Unity's parser and
+schema are an independent standard-library implementation: `gdep` is not a
+runtime dependency, no MCP server is registered, and no `.gdep` directory or
+second `AGENTS.md` owner is created.

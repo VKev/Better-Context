@@ -20,6 +20,7 @@ import hashlib
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional, Any
 
 from .config import Config, load_config
@@ -42,9 +43,79 @@ from .roslyn import RoslynUnavailableError, analyze_csharp_project, discover_pro
 from .unity_intelligence import (
     classify_ownership,
     collect_project_facts,
-    collect_serialized_reference_edges,
     is_unity_project,
 )
+from .unity_runtime import UnityRuntimeAnalysis, analyze_unity_runtime
+
+
+def _merge_edge_details(details: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one deterministic evidence record per graph edge."""
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    confidence_rank = {"exact": 4, "structured": 3, "resolved": 2, "partial": 1}
+
+    def evidence_items(detail: dict[str, Any]) -> list[Any]:
+        raw = detail.get("evidence", [])
+        if isinstance(raw, list):
+            return list(raw)
+        return [raw] if raw else []
+
+    for detail in details:
+        source = str(detail.get("source", ""))
+        target = str(detail.get("target", ""))
+        if not source or not target or target.endswith(".meta"):
+            continue
+        key = (source, target)
+        if key not in merged:
+            normalized = {
+                **detail,
+                "source": source,
+                "target": target,
+                "kinds": sorted(set(detail.get("kinds", []))),
+                "symbols": sorted(set(detail.get("symbols", []))),
+                "lines": sorted(set(detail.get("lines", []))),
+            }
+            if detail.get("evidence"):
+                normalized["evidence"] = evidence_items(detail)
+            merged[key] = normalized
+            continue
+
+        current = merged[key]
+        current["kinds"] = sorted(
+            set(current.get("kinds", [])) | set(detail.get("kinds", []))
+        )
+        current["symbols"] = sorted(
+            set(current.get("symbols", [])) | set(detail.get("symbols", []))
+        )
+        current["lines"] = sorted(
+            set(current.get("lines", [])) | set(detail.get("lines", []))
+        )
+        current_confidence = str(current.get("confidence", "partial"))
+        new_confidence = str(detail.get("confidence", "partial"))
+        if confidence_rank.get(new_confidence, 0) > confidence_rank.get(current_confidence, 0):
+            current["confidence"] = new_confidence
+
+        engines = {
+            str(engine)
+            for engine in [
+                current.get("engine"),
+                detail.get("engine"),
+                *current.get("engines", []),
+                *detail.get("engines", []),
+            ]
+            if engine
+        }
+        if len(engines) > 1:
+            current["engine"] = "mixed"
+            current["engines"] = sorted(engines - {"mixed"})
+
+        incoming_evidence = evidence_items(detail)
+        if incoming_evidence:
+            evidence = current.setdefault("evidence", [])
+            for item in incoming_evidence:
+                if item not in evidence:
+                    evidence.append(item)
+
+    return [merged[key] for key in sorted(merged)]
 
 
 @dataclass
@@ -111,6 +182,7 @@ class Orchestrator:
         self._progress_callback: Optional[ProgressCallback] = None
         self._edge_details: List[Dict[str, Any]] = []
         self._csharp_calls: List[Dict[str, Any]] = []
+        self._unity_runtime: Optional[UnityRuntimeAnalysis] = None
         self._analysis_engine = "language-adapters"
     
     def set_progress_callback(self, callback: ProgressCallback) -> None:
@@ -306,6 +378,7 @@ class Orchestrator:
         """Parse all files and extract chunks/imports/exports."""
         self._edge_details = []
         self._csharp_calls = []
+        self._unity_runtime = None
         self._analysis_engine = "language-adapters"
         parsed: Dict[str, Any] = {}
         errors: List[ParseError] = []
@@ -432,7 +505,7 @@ class Orchestrator:
             self.root,
         )
 
-        self._add_verified_edges(graph, inventory)
+        self._add_verified_edges(graph, inventory, parsed_files)
         
         return resolution, graph
 
@@ -440,16 +513,55 @@ class Orchestrator:
         self,
         graph: DependencyGraph,
         inventory: FileInventory,
+        parsed_files: Dict[str, Any],
     ) -> None:
-        """Add semantic C# and exact Unity GUID edges to the shared graph."""
+        """Add semantic C# and structured Unity runtime edges to the shared graph."""
         for detail in self._edge_details:
             graph.add_edge(detail["source"], detail["target"])
 
         if is_unity_project(self.root):
-            serialized = collect_serialized_reference_edges(inventory)
-            self._edge_details.extend(serialized)
-            for detail in serialized:
-                graph.add_edge(detail["source"], detail["target"])
+            runtime_files = [
+                SimpleNamespace(
+                    path=entry.path,
+                    chunks=list(getattr(parsed_files.get(entry.path), "chunks", [])),
+                    metadata={"ownership": classify_ownership(entry.path)},
+                )
+                for entry in inventory.files
+            ]
+            self._unity_runtime = analyze_unity_runtime(
+                self.root,
+                inventory,
+                runtime_files,
+                scope=self.config.unity_asset_scope,
+            )
+            self._unity_runtime.summary.setdefault("scope", self.config.unity_asset_scope)
+            self._unity_runtime.summary["agents_limits"] = {
+                "assets": self.config.unity_agents_asset_limit,
+                "objects": self.config.unity_agents_object_limit,
+            }
+            for asset_path, asset in self._unity_runtime.assets.items():
+                if asset.get("status") == "parsed":
+                    graph.add_node(asset_path)
+            valid_nodes = set(graph.nodes)
+            for detail in self._unity_runtime.edge_details:
+                source = detail.get("source", "")
+                target = detail.get("target", "")
+                if (
+                    source not in valid_nodes
+                    or target not in valid_nodes
+                    or target.endswith(".meta")
+                ):
+                    continue
+                normalized = {
+                    **detail,
+                    "confidence": detail.get("confidence", "structured"),
+                    "engine": detail.get("engine", "unity-yaml"),
+                }
+                self._edge_details.append(normalized)
+                graph.add_edge(source, target)
+            self._csharp_calls.extend(self._unity_runtime.call_graph)
+
+        self._edge_details = _merge_edge_details(self._edge_details)
 
         detailed_pairs = {
             (detail["source"], detail["target"])
@@ -466,6 +578,8 @@ class Orchestrator:
                     "confidence": "resolved",
                     "engine": "language-adapter",
                 })
+
+        self._edge_details = _merge_edge_details(self._edge_details)
     
     def _build_manifest(
         self,
@@ -538,6 +652,12 @@ class Orchestrator:
                 metadata={"ownership": classify_ownership(file_info.path)},
             ))
 
+        if self._unity_runtime is not None:
+            for entry in files:
+                runtime_metadata = self._unity_runtime.assets.get(entry.path)
+                if runtime_metadata is not None:
+                    entry.metadata["unity_runtime"] = runtime_metadata
+
         source_files = [
             entry for entry in files
             if entry.language and not entry.path.endswith("AGENTS.md")
@@ -571,6 +691,9 @@ class Orchestrator:
         analyzed_source_files = [entry for entry in analyzed_files if entry.language]
         project = collect_project_facts(self.root, [entry.path for entry in analyzed_files])
         project["analysis_engine"] = self._analysis_engine
+        if self._unity_runtime is not None:
+            project["unity_runtime"] = self._unity_runtime.summary
+            project["unity_analysis_engine"] = "unity-yaml-structured-v1"
         ownership_by_path = {
             entry.path: entry.metadata.get("ownership", "repository") for entry in analyzed_files
         }
@@ -588,6 +711,14 @@ class Orchestrator:
             )
         ]
         project["project_cycles"] = project_cycles
+        serialized_kinds = {
+            "serialized_guid",
+            "unity_component",
+            "scriptable_object_type",
+            "prefab_instance",
+            "animator_motion",
+            "unity_event",
+        }
         project["metrics"] = {
             "files": len(analyzed_files),
             "source_files": len(analyzed_source_files),
@@ -598,10 +729,20 @@ class Orchestrator:
             "dependencies": len(graph.get_all_edges()),
             "project_owned_dependencies": len(project_edges),
             "semantic_csharp_dependencies": sum(
-                1 for item in self._edge_details if item.get("engine") == "roslyn"
+                1
+                for item in self._edge_details
+                if item.get("engine") == "roslyn" or "roslyn" in item.get("engines", [])
             ),
             "serialized_dependencies": sum(
-                1 for item in self._edge_details if "serialized_guid" in item.get("kinds", [])
+                1
+                for item in self._edge_details
+                if serialized_kinds.intersection(item.get("kinds", []))
+            ),
+            "roslyn_call_sites": sum(
+                1 for item in self._csharp_calls if item.get("kind") != "unity_event"
+            ),
+            "unity_event_calls": sum(
+                1 for item in self._csharp_calls if item.get("kind") == "unity_event"
             ),
             "call_sites": len(self._csharp_calls),
             "cycles": len(cycles),
@@ -621,11 +762,21 @@ class Orchestrator:
             architecture=architecture,
         )
         
+        all_errors = list(parse_errors)
+        if self._unity_runtime is not None:
+            for error in self._unity_runtime.errors[:100]:
+                all_errors.append(ParseError(
+                    path=str(error.get("path", "<unity-asset>")),
+                    error_type=str(error.get("error_type", "unity-runtime")),
+                    message=str(error.get("message", "Unity runtime analysis failed")),
+                    line=error.get("line"),
+                ))
+
         return Manifest(
             meta=meta,
             files=files,
             graph=graph_data,
-            errors=parse_errors,
+            errors=all_errors,
             project=project,
         )
 

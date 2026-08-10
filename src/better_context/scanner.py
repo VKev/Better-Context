@@ -48,6 +48,9 @@ BINARY_EXTENSIONS: frozenset[str] = frozenset({
 
 # Default maximum file size (1MB)
 DEFAULT_MAX_FILE_SIZE_KB = 1024
+UNITY_STREAMED_ASSET_EXTENSIONS: frozenset[str] = frozenset(
+    {".asset", ".controller", ".overridecontroller", ".prefab", ".unity"}
+)
 
 
 @dataclass
@@ -131,6 +134,21 @@ def is_text_file(path: Path, sample_size: int = 2048) -> bool:
         
     except OSError:
         return False
+
+
+def is_streamed_unity_asset(path: Path, sample_size: int = 2048) -> bool:
+    """Return whether an asset uses Unity's inspectable streamed-YAML format."""
+    if path.suffix.lower() not in UNITY_STREAMED_ASSET_EXTENSIONS:
+        return False
+    try:
+        with path.open("rb") as stream:
+            prefix = stream.read(sample_size)
+    except OSError:
+        return False
+    if b"\x00" in prefix:
+        return False
+    prefix = prefix.removeprefix(b"\xef\xbb\xbf").lstrip()
+    return prefix.startswith(b"%YAML") or prefix.startswith(b"--- !u!")
 
 
 def detect_encoding(path: Path) -> Optional[str]:
@@ -305,7 +323,10 @@ def walk_repository(
                 continue
             
             # Check file size
-            if stat.st_size > max_file_size_bytes:
+            oversized_streamed_unity = (
+                stat.st_size > max_file_size_bytes and is_streamed_unity_asset(abs_path)
+            )
+            if stat.st_size > max_file_size_bytes and not oversized_streamed_unity:
                 inventory.skipped_too_large.append(rel_path)
                 continue
             

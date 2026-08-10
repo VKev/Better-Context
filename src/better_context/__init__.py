@@ -5,7 +5,7 @@ mathematically structured, semantically meaningful pieces that AI agents
 can progressively consume.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.3.0"
 
 # Re-export key types for convenient access
 from better_context.config import Config, load_config, validate_config
@@ -101,6 +101,7 @@ from better_context.semantic_anchor import (
     anchor_mapping_to_dict,
     dict_to_anchor_mapping,
 )
+from better_context.unity_runtime import UnityRuntimeAnalysis, analyze_unity_runtime
 from better_context.primitives import (
     DepsResult,
     EntriesResult,
@@ -206,6 +207,9 @@ __all__ = [
     "update_anchor_mapping",
     "anchor_mapping_to_dict",
     "dict_to_anchor_mapping",
+    # Unity runtime intelligence
+    "UnityRuntimeAnalysis",
+    "analyze_unity_runtime",
     # Primitives
     "DepsResult",
     "EntriesResult",

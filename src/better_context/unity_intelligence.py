@@ -97,7 +97,7 @@ def collect_project_facts(root: Path, paths: Iterable[str]) -> dict[str, Any]:
 
 
 def collect_serialized_reference_edges(inventory: Any) -> list[dict[str, Any]]:
-    """Resolve Unity YAML GUID references to asset paths, never to .meta files."""
+    """Resolve structured Unity object-reference fields, never free-text GUIDs."""
     by_path = {entry.path.replace("\\", "/"): entry for entry in inventory.files}
     guid_to_asset: dict[str, str] = {}
     for path, entry in by_path.items():
@@ -121,21 +121,37 @@ def collect_serialized_reference_edges(inventory: Any) -> list[dict[str, Any]]:
             source = entry.absolute_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        targets: dict[str, set[str]] = {}
-        for match in GUID_PATTERN.finditer(source):
-            guid = match.group(1).lower()
-            target = guid_to_asset.get(guid)
-            if not target or target == path:
+        targets: dict[str, dict[str, Any]] = {}
+        for line_number, line in enumerate(source.splitlines(), 1):
+            stripped = line.lstrip()
+            if (
+                not stripped
+                or stripped.startswith("#")
+                or "{" not in stripped
+                or "}" not in stripped
+            ):
                 continue
-            targets.setdefault(target, set()).add(guid)
-        for target, guids in sorted(targets.items()):
+            brace_start = stripped.find("{")
+            prefix = stripped[:brace_start]
+            if prefix.count('"') % 2 or prefix.count("'") % 2:
+                continue
+            reference = stripped[brace_start : stripped.rfind("}") + 1]
+            for match in GUID_PATTERN.finditer(reference):
+                guid = match.group(1).lower()
+                target = guid_to_asset.get(guid)
+                if not target or target == path:
+                    continue
+                evidence = targets.setdefault(target, {"guids": set(), "lines": set()})
+                evidence["guids"].add(guid)
+                evidence["lines"].add(line_number)
+        for target, evidence in sorted(targets.items()):
             details.append(
                 {
                     "source": path,
                     "target": target,
                     "kinds": ["serialized_guid"],
-                    "symbols": sorted(guids)[:5],
-                    "lines": [],
+                    "symbols": sorted(evidence["guids"])[:5],
+                    "lines": sorted(evidence["lines"]),
                     "confidence": "exact",
                 }
             )

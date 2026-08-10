@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional
 
 from .config import load_config
-from .manifest import generator_version, load_manifest, Manifest
+from .manifest import MANIFEST_VERSION, Manifest, generator_version, load_manifest
 from .orchestrator import Orchestrator, generate_context
 from .staleness import (
     check_staleness,
+    collect_current_hashes,
+    compute_source_hash,
     format_staleness_report,
     load_staleness_info,
     save_staleness_info,
@@ -56,7 +59,7 @@ from .agents_map import (
 
 def _get_version() -> str:
     """Get package version from metadata."""
-    return generator_version()
+    return str(generator_version())
 
 
 def add_common_primitive_args(parser: argparse.ArgumentParser) -> None:
@@ -200,6 +203,51 @@ Agent Workflow:
     deps_parser = subparsers.add_parser("deps", help="Get direct dependencies and dependents for a file")
     deps_parser.add_argument("path", help="Path to file")
     deps_parser.add_argument("--format", choices=["json", "human", "markdown"], default="json")
+
+    # --- unity command ---
+    unity_parser = subparsers.add_parser(
+        "unity",
+        help="Query Unity scenes, prefabs, ScriptableObjects, events, and animators",
+    )
+    unity_subparsers = unity_parser.add_subparsers(dest="unity_command", required=True)
+
+    unity_list_parser = unity_subparsers.add_parser(
+        "list",
+        help="List Unity runtime assets from the saved manifest",
+    )
+    unity_list_parser.add_argument("--kind", help="Filter by asset kind")
+    unity_list_parser.add_argument(
+        "--limit", type=int, default=50, help="Maximum assets (default: 50)"
+    )
+    unity_list_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
+
+    unity_show_parser = unity_subparsers.add_parser(
+        "show",
+        help="Show full runtime data for one project-relative Unity asset",
+    )
+    unity_show_parser.add_argument("path", help="Project-relative Unity asset path")
+    unity_show_parser.add_argument(
+        "--depth",
+        type=int,
+        default=2,
+        help="Maximum GameObject hierarchy depth (-1 = unlimited; default: 2)",
+    )
+    unity_show_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
+
+    unity_bindings_parser = unity_subparsers.add_parser(
+        "bindings",
+        help="List verified and unresolved persistent UnityEvent bindings",
+    )
+    unity_bindings_parser.add_argument("--asset", help="Filter by exact project-relative asset")
+    unity_bindings_parser.add_argument("--type", help="Filter by exact target type")
+    unity_bindings_parser.add_argument("--method", help="Filter by exact target method")
+    unity_bindings_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
 
     # --- stats command ---
     stats_parser = subparsers.add_parser("stats", help="Calculate metrics and find important files (PageRank)")
@@ -388,6 +436,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "entries": cmd_entries,
         "file": cmd_file,
         "deps": cmd_deps,
+        "unity": cmd_unity,
     }
 
     handler = command_handlers.get(args.command)
@@ -400,11 +449,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 def get_manifest_path(args: argparse.Namespace) -> Path:
     """Get manifest path from args or default location."""
-    root = getattr(args, 'root', Path('.'))
-    config = load_config(root)
+    root = Path(getattr(args, 'root', Path('.')))
+    config = load_config(root, getattr(args, "config", None))
     if hasattr(args, 'manifest') and args.manifest:
         return Path(args.manifest)
-    return root / config.output_dir / config.manifest_file
+    return Path(root, str(config.output_dir), str(config.manifest_file))
 
 
 def load_manifest_or_fail(args: argparse.Namespace) -> Optional[Manifest]:
@@ -421,13 +470,465 @@ def load_manifest_or_fail(args: argparse.Namespace) -> Optional[Manifest]:
         return None
 
 
+def _load_fresh_unity_manifest(args: argparse.Namespace) -> Optional[Manifest]:
+    """Load the Unity runtime manifest only when it matches the current project."""
+    root = args.root.resolve()
+    config = load_config(root, getattr(args, "config", None))
+    manifest_path = root / config.output_dir / config.manifest_file
+    if not manifest_path.exists():
+        print(f"[error] Manifest not found at {manifest_path}")
+        print("[hint] Run 'better-context-unity agents' to generate Unity runtime data.")
+        return None
+
+    try:
+        manifest = load_manifest(manifest_path)
+    except Exception as exc:
+        print(f"[error] Failed to load manifest: {exc}")
+        print("[hint] Run 'better-context-unity agents' to rebuild it.")
+        return None
+
+    if manifest.meta.version != MANIFEST_VERSION:
+        print(
+            "[error] Unity runtime manifest schema is outdated: "
+            f"expected {MANIFEST_VERSION}, got {manifest.meta.version or 'unknown'}."
+        )
+        print("[hint] Run 'better-context-unity agents' to rebuild it.")
+        return None
+
+    staleness_info = load_staleness_info(root, config.output_dir)
+    if staleness_info is None:
+        print("[error] Manifest freshness cannot be verified (staleness data is missing).")
+        print("[hint] Run 'better-context-unity agents' to rebuild it.")
+        return None
+
+    if manifest.meta.generated_at != staleness_info.generated_at:
+        print("[error] Manifest and freshness data were generated by different analyses.")
+        print("[hint] Run 'better-context-unity agents' to rebuild them together.")
+        return None
+
+    effective_config_hash = hashlib.sha256(str(vars(config)).encode()).hexdigest()[:16]
+    if manifest.meta.config_hash != effective_config_hash:
+        print("[error] Unity runtime manifest was generated with different configuration.")
+        print("[hint] Run 'better-context-unity agents' with the current configuration.")
+        return None
+
+    try:
+        current_hash = compute_source_hash(
+            collect_current_hashes(root, getattr(args, "config", None))
+        )
+    except Exception as exc:
+        print(f"[error] Failed to verify manifest freshness: {exc}")
+        return None
+    if current_hash != staleness_info.source_hash:
+        print("[error] Unity runtime manifest is stale; project files changed after analysis.")
+        print("[hint] Run 'better-context-unity agents' to refresh it.")
+        return None
+
+    if not isinstance(manifest.project.get("unity_runtime"), dict):
+        print("[error] Manifest does not contain Unity runtime intelligence.")
+        print("[hint] Run 'better-context-unity agents' with Better Context Unity 1.3.0 or newer.")
+        return None
+    return manifest
+
+
+def _normalize_unity_path(value: str) -> str:
+    """Return a safe, normalized project-relative manifest path."""
+    normalized = value.strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    path = PurePosixPath(normalized)
+    has_drive_prefix = bool(path.parts and ":" in path.parts[0])
+    if not normalized or path.is_absolute() or ".." in path.parts or has_drive_prefix:
+        raise ValueError("Unity asset path must be project-relative and cannot contain '..'")
+    return path.as_posix()
+
+
+def _compact_unity_asset(value: dict[str, Any], default_path: str = "") -> dict[str, Any]:
+    """Fill compact display fields from a full per-file runtime record."""
+    asset = dict(value)
+    asset.setdefault("path", default_path)
+    objects = asset.get("objects", [])
+    if not isinstance(objects, list):
+        objects = []
+    script_types: set[str] = set()
+    object_by_id: dict[str, dict[str, Any]] = {}
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        object_by_id[str(obj.get("file_id", ""))] = obj
+        components = obj.get("components", [])
+        if not isinstance(components, list):
+            continue
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            script = component.get("script", {})
+            if isinstance(script, dict):
+                name = script.get("qualified_name") or script.get("type")
+                if name:
+                    script_types.add(str(name))
+
+    root_values = asset.get("root_objects", asset.get("roots", []))
+    root_objects = []
+    if isinstance(root_values, list):
+        for root in root_values:
+            if isinstance(root, dict):
+                root_objects.append(root.get("path") or root.get("name") or root.get("file_id"))
+            else:
+                obj = object_by_id.get(str(root), {})
+                root_objects.append(obj.get("path") or obj.get("name") or root)
+    events = asset.get("event_bindings", asset.get("unity_events", []))
+    event_count = len(events) if isinstance(events, list) else 0
+    animator = asset.get("animator", {})
+    states = animator.get("states", []) if isinstance(animator, dict) else []
+
+    asset.setdefault("object_count", len(objects))
+    asset.setdefault(
+        "component_count",
+        sum(
+            len(obj.get("components", []))
+            for obj in objects
+            if isinstance(obj, dict) and isinstance(obj.get("components", []), list)
+        ),
+    )
+    asset.setdefault("script_types", sorted(script_types))
+    asset.setdefault("root_objects", [str(value) for value in root_objects if value])
+    asset.setdefault("event_count", event_count)
+    asset.setdefault("animator_state_count", len(states) if isinstance(states, list) else 0)
+    asset.setdefault("signal_score", asset.get("high_signal", 0))
+    return asset
+
+
+def _unity_assets(manifest: Manifest) -> list[dict[str, Any]]:
+    """Read compact assets while accepting list and path-keyed manifest forms."""
+    runtime = manifest.project.get("unity_runtime", {})
+    raw_assets = runtime.get("assets", []) if isinstance(runtime, dict) else []
+    assets: list[dict[str, Any]] = []
+    if isinstance(raw_assets, dict):
+        for path, value in raw_assets.items():
+            if not isinstance(value, dict):
+                continue
+            assets.append(_compact_unity_asset(value, str(path)))
+    elif isinstance(raw_assets, list):
+        assets.extend(
+            _compact_unity_asset(value) for value in raw_assets if isinstance(value, dict)
+        )
+
+    if not assets:
+        for entry in manifest.files:
+            value = entry.metadata.get("unity_runtime")
+            if isinstance(value, dict):
+                assets.append(_compact_unity_asset(value, entry.path))
+
+    deduplicated: dict[str, dict[str, Any]] = {}
+    for asset in assets:
+        path = str(asset.get("path", "")).replace("\\", "/")
+        if path:
+            asset["path"] = path
+            deduplicated[path.casefold()] = asset
+    return sorted(deduplicated.values(), key=lambda asset: str(asset.get("path", "")).casefold())
+
+
+def _normalize_unity_binding(value: dict[str, Any], default_asset: str = "") -> dict[str, Any]:
+    binding = dict(value)
+    binding.setdefault("asset", default_asset)
+    binding.setdefault("owner_object", binding.get("owner_path", ""))
+    binding.setdefault("status", binding.get("confidence", "unresolved"))
+    return binding
+
+
+def _unity_bindings(manifest: Manifest) -> list[dict[str, Any]]:
+    """Read root bindings, falling back to per-asset runtime data."""
+    runtime = manifest.project.get("unity_runtime", {})
+    raw_bindings = runtime.get("event_bindings", []) if isinstance(runtime, dict) else []
+    bindings = (
+        [_normalize_unity_binding(value) for value in raw_bindings if isinstance(value, dict)]
+        if isinstance(raw_bindings, list)
+        else []
+    )
+    if bindings:
+        return bindings
+
+    for entry in manifest.files:
+        file_runtime = entry.metadata.get("unity_runtime")
+        if not isinstance(file_runtime, dict):
+            continue
+        file_bindings = file_runtime.get(
+            "event_bindings", file_runtime.get("unity_events", [])
+        )
+        if not isinstance(file_bindings, list):
+            continue
+        for value in file_bindings:
+            if not isinstance(value, dict):
+                continue
+            bindings.append(_normalize_unity_binding(value, entry.path))
+    return bindings
+
+
+def _unity_object_depth(value: dict[str, Any]) -> int:
+    explicit = value.get("depth")
+    if isinstance(explicit, int) and not isinstance(explicit, bool):
+        return explicit
+    object_path = value.get("path") or value.get("object_path")
+    if isinstance(object_path, str):
+        return max(0, len([part for part in object_path.split("/") if part]) - 1)
+    return 0
+
+
+def _trim_unity_children(value: dict[str, Any], remaining_depth: int) -> dict[str, Any]:
+    trimmed = dict(value)
+    children = value.get("children")
+    if not isinstance(children, list):
+        return trimmed
+    if remaining_depth <= 0:
+        trimmed["children"] = []
+        return trimmed
+    trimmed["children"] = [
+        _trim_unity_children(child, remaining_depth - 1)
+        if isinstance(child, dict)
+        else child
+        for child in children
+    ]
+    return trimmed
+
+
+def _trim_unity_depth(runtime: dict[str, Any], depth: int) -> dict[str, Any]:
+    """Limit object hierarchy output without modifying manifest data."""
+    result = dict(runtime)
+    objects = runtime.get("objects")
+    if depth < 0 or not isinstance(objects, list):
+        return result
+    result["objects"] = [
+        _trim_unity_children(value, depth - _unity_object_depth(value))
+        if isinstance(value, dict)
+        else value
+        for value in objects
+        if not isinstance(value, dict) or _unity_object_depth(value) <= depth
+    ]
+    return result
+
+
+def _unity_cell(value: Any) -> str:
+    if value is None or value == "":
+        return "—"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) if value else "—"
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return str(value)
+
+
+def _format_unity_assets(assets: list[dict[str, Any]], fmt: str, total: int) -> str:
+    if fmt == "json":
+        return json.dumps(
+            {"assets": assets, "shown": len(assets), "total": total},
+            indent=2,
+            ensure_ascii=False,
+        )
+    if fmt == "markdown":
+        lines = [
+            "# Unity runtime assets",
+            "",
+            "| Asset | Kind | Status | Objects | Components | Scripts | Events | Animator states |",
+            "|---|---|---|---:|---:|---|---:|---:|",
+        ]
+        for asset in assets:
+            cells = [
+                asset.get("path"),
+                asset.get("kind"),
+                asset.get("status"),
+                asset.get("object_count", 0),
+                asset.get("component_count", 0),
+                asset.get("script_types", []),
+                asset.get("event_count", 0),
+                asset.get("animator_state_count", 0),
+            ]
+            escaped = [_unity_cell(cell).replace("|", "\\|").replace("\n", " ") for cell in cells]
+            lines.append(f"| {' | '.join(escaped)} |")
+        lines.extend(["", f"Showing {len(assets)} of {total} matching asset(s)."])
+        return "\n".join(lines)
+
+    lines = [f"Unity runtime assets: showing {len(assets)} of {total}"]
+    for asset in assets:
+        scripts = _unity_cell(asset.get("script_types", []))
+        lines.append(
+            f"- {asset.get('path', '—')} [{asset.get('kind', 'unknown')}] "
+            f"{asset.get('status', 'unknown')}; objects={asset.get('object_count', 0)}, "
+            f"components={asset.get('component_count', 0)}, scripts={scripts}, "
+            f"events={asset.get('event_count', 0)}, "
+            f"animator_states={asset.get('animator_state_count', 0)}"
+        )
+    return "\n".join(lines)
+
+
+def _format_unity_show(runtime: dict[str, Any], fmt: str) -> str:
+    if fmt == "json":
+        return json.dumps(runtime, indent=2, ensure_ascii=False)
+    if fmt == "markdown":
+        lines = [f"# Unity asset: {_unity_cell(runtime.get('path'))}", ""]
+        for key in ("kind", "status", "ownership"):
+            lines.append(f"- **{key.replace('_', ' ').title()}:** {_unity_cell(runtime.get(key))}")
+        for key, value in runtime.items():
+            if key in {"path", "kind", "status", "ownership"}:
+                continue
+            lines.extend(
+                [
+                    "",
+                    f"## {key.replace('_', ' ').title()}",
+                    "",
+                    "```json",
+                    json.dumps(value, indent=2, ensure_ascii=False),
+                    "```",
+                ]
+            )
+        return "\n".join(lines)
+
+    lines = [f"Unity asset: {_unity_cell(runtime.get('path'))}"]
+    for key, value in runtime.items():
+        if key == "path":
+            continue
+        rendered = (
+            json.dumps(value, ensure_ascii=False)
+            if isinstance(value, (dict, list))
+            else value
+        )
+        lines.append(f"{key}: {_unity_cell(rendered)}")
+    return "\n".join(lines)
+
+
+def _format_unity_bindings(bindings: list[dict[str, Any]], fmt: str) -> str:
+    if fmt == "json":
+        return json.dumps(
+            {"bindings": bindings, "count": len(bindings)}, indent=2, ensure_ascii=False
+        )
+    if fmt == "markdown":
+        lines = [
+            "# UnityEvent bindings",
+            "",
+            "| Asset | Owner object | Target type | Method | Mode | Status |",
+            "|---|---|---|---|---|---|",
+        ]
+        for binding in bindings:
+            cells = [
+                binding.get("asset"),
+                binding.get("owner_object"),
+                binding.get("target_type") or binding.get("target_script"),
+                binding.get("method"),
+                binding.get("mode"),
+                binding.get("status"),
+            ]
+            escaped = [_unity_cell(cell).replace("|", "\\|").replace("\n", " ") for cell in cells]
+            lines.append(f"| {' | '.join(escaped)} |")
+        return "\n".join(lines)
+
+    lines = [f"UnityEvent bindings: {len(bindings)}"]
+    for binding in bindings:
+        target_type = binding.get("target_type") or binding.get("target_script") or "—"
+        lines.append(
+            f"- {binding.get('asset', '—')} :: {binding.get('owner_object', '—')} -> "
+            f"{target_type}.{binding.get('method', '—')} "
+            f"[{binding.get('status', 'unknown')}, mode={binding.get('mode', '—')}]"
+        )
+    return "\n".join(lines)
+
+
+def cmd_unity(args: argparse.Namespace) -> int:
+    """Query Unity runtime intelligence from a verified fresh manifest."""
+    manifest = _load_fresh_unity_manifest(args)
+    if manifest is None:
+        return 1
+
+    if args.unity_command == "list":
+        if args.limit <= 0:
+            print("[error] --limit must be a positive integer")
+            return 1
+        assets = _unity_assets(manifest)
+        if args.kind:
+            kind = args.kind.replace("_", "-").casefold()
+            assets = [
+                asset
+                for asset in assets
+                if str(asset.get("kind", "")).replace("_", "-").casefold() == kind
+            ]
+        print(_format_unity_assets(assets[: args.limit], args.format, len(assets)))
+        return 0
+
+    if args.unity_command == "show":
+        if args.depth < -1:
+            print("[error] --depth must be -1 or greater")
+            return 1
+        try:
+            target = _normalize_unity_path(args.path)
+        except ValueError as exc:
+            print(f"[error] {exc}")
+            return 1
+
+        compact = next(
+            (
+                asset
+                for asset in _unity_assets(manifest)
+                if asset["path"].casefold() == target.casefold()
+            ),
+            None,
+        )
+        entry = next(
+            (item for item in manifest.files if item.path.casefold() == target.casefold()),
+            None,
+        )
+        full = entry.metadata.get("unity_runtime") if entry is not None else None
+        if compact is None and not isinstance(full, dict):
+            print(f"[error] Unity runtime asset not found in manifest: {target}")
+            return 1
+        runtime = dict(compact or {})
+        if isinstance(full, dict):
+            runtime.update(full)
+        runtime["path"] = target
+        print(_format_unity_show(_trim_unity_depth(runtime, args.depth), args.format))
+        return 0
+
+    if args.unity_command == "bindings":
+        bindings = _unity_bindings(manifest)
+        if args.asset:
+            try:
+                asset_path = _normalize_unity_path(args.asset)
+            except ValueError as exc:
+                print(f"[error] {exc}")
+                return 1
+            bindings = [
+                binding
+                for binding in bindings
+                if str(binding.get("asset", "")).replace("\\", "/").casefold()
+                == asset_path.casefold()
+            ]
+        if args.type:
+            expected_type = args.type.casefold()
+            bindings = [
+                binding
+                for binding in bindings
+                if str(binding.get("target_type") or binding.get("target_script") or "").casefold()
+                == expected_type
+            ]
+        if args.method:
+            expected_method = args.method.casefold()
+            bindings = [
+                binding
+                for binding in bindings
+                if str(binding.get("method", "")).casefold() == expected_method
+            ]
+        print(_format_unity_bindings(bindings, args.format))
+        return 0
+
+    print(f"[error] Unknown Unity command: {args.unity_command}")
+    return 1
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan codebase and generate manifest."""
     root = (args.path if args.path is not None else args.root).resolve()
     print(f"[scan] Scanning {root}...")
     
     try:
-        orchestrator = Orchestrator(root)
+        orchestrator = Orchestrator(root, config_path=args.config)
         
         def progress(phase: str, current: int, total: int) -> None:
             if args.verbose:
@@ -474,7 +975,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
         if overlap:
             raise ValueError(f"Cannot add and remove the same summary: {overlap[0] or '.'}")
 
-        orchestrator = Orchestrator(root)
+        orchestrator = Orchestrator(root, config_path=args.config)
         analysis = orchestrator.analyze()
         targets = summary_targets(analysis.manifest, root, args.max_depth)
         invalid_updates = sorted(path for path in updates if path not in targets)
@@ -496,7 +997,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
             print(f"[agents] {action} {len(summaries)} optional summary(s) in {SUMMARY_FILE}")
             if not args.dry_run:
                 save_summaries(root, summaries)
-                orchestrator = Orchestrator(root)
+                orchestrator = Orchestrator(root, config_path=args.config)
                 analysis = orchestrator.analyze()
 
         if not args.dry_run:
@@ -705,10 +1206,12 @@ def _export_call_graph(manifest: Manifest, fmt: str) -> str:
         label = nodes[node].replace('"', "'")
         lines.append(f'  {local_id}["{label}"]')
     for call in calls:
-        caller = node_ids.get(call.get("callerId"))
-        callee = node_ids.get(call.get("calleeId"))
-        if caller and callee:
-            lines.append(f"  {caller} -->|{call.get('kind', 'call')}| {callee}")
+        caller_node = node_ids.get(str(call.get("callerId") or ""))
+        callee_node = node_ids.get(str(call.get("calleeId") or ""))
+        if caller_node and callee_node:
+            lines.append(
+                f"  {caller_node} -->|{call.get('kind', 'call')}| {callee_node}"
+            )
     return "\n".join(lines)
 
 

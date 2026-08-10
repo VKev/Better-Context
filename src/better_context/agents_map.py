@@ -8,6 +8,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import quote
 
 from .graph import DependencyGraph
@@ -18,8 +19,12 @@ BEGIN = "<!-- better-context-unity:begin -->"
 END = "<!-- better-context-unity:end -->"
 MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTALL)
 UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
+UNITY_RUNTIME_SUFFIXES = {".asset", ".controller", ".overridecontroller", ".prefab", ".unity"}
 SUMMARY_FILE = ".ctx-summaries.json"
 MAX_SUMMARY_LENGTH = 240
+DEFAULT_UNITY_ASSET_LIMIT = 12
+DEFAULT_UNITY_OBJECT_LIMIT = 8
+ROOT_UNITY_ASSET_LIMIT = 8
 UNITY_LIFECYCLE_METHODS = {
     "Awake",
     "OnEnable",
@@ -100,7 +105,9 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
             continue
         if unity and path.parts[0] not in UNITY_ROOTS:
             continue
-        if unity and not _is_map_signal_file(path):
+        if unity and not (
+            _is_map_signal_file(path) or _has_unity_runtime_signal(entry, manifest)
+        ):
             continue
         boundary = _map_boundary(path.parent) if unity else None
         parent = path.parent
@@ -115,7 +122,11 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
             parent = parent.parent
     if unity:
         for scene in manifest.project.get("scenes", []):
-            if scene.get("ownership") != "project-owned" or not scene.get("path"):
+            if (
+                scene.get("ownership") != "project-owned"
+                or not scene.get("path")
+                or not scene.get("enabled")
+            ):
                 continue
             parent = PurePosixPath(scene["path"]).parent
             while str(parent) != ".":
@@ -132,11 +143,481 @@ def _is_map_signal_file(path: PurePosixPath) -> bool:
         ".cs",
         ".asmdef",
         ".asmref",
-        ".unity",
         ".json",
         ".uxml",
         ".uss",
     }
+
+
+def _unity_runtime(entry: FileEntry) -> Mapping[str, Any]:
+    value = entry.metadata.get("unity_runtime")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _unity_runtime_project(manifest: Manifest) -> Mapping[str, Any]:
+    value = manifest.project.get("unity_runtime")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _runtime_asset_entries(manifest: Manifest) -> list[tuple[FileEntry, Mapping[str, Any]]]:
+    """Return full per-file records, supplemented by compact project records."""
+    compact: dict[str, Mapping[str, Any]] = {}
+    raw_assets = _unity_runtime_project(manifest).get("assets", [])
+    if isinstance(raw_assets, Mapping):
+        for path, value in raw_assets.items():
+            if isinstance(path, str) and isinstance(value, Mapping):
+                compact[path] = value
+    elif isinstance(raw_assets, list):
+        for value in raw_assets:
+            if isinstance(value, Mapping) and isinstance(value.get("path"), str):
+                compact[str(value["path"])] = value
+
+    values: list[tuple[FileEntry, Mapping[str, Any]]] = []
+    for entry in manifest.files:
+        detail = _unity_runtime(entry)
+        if not detail:
+            detail = compact.get(entry.path, {})
+        if detail:
+            values.append((entry, detail))
+    return values
+
+
+def _runtime_ownership(entry: FileEntry, detail: Mapping[str, Any]) -> str:
+    value = detail.get("ownership") or entry.metadata.get("ownership")
+    return str(value or classify_ownership(entry.path))
+
+
+def _runtime_scope_allows(
+    entry: FileEntry,
+    detail: Mapping[str, Any],
+    manifest: Manifest,
+) -> bool:
+    ownership = _runtime_ownership(entry, detail)
+    scope = str(_unity_runtime_project(manifest).get("scope", "project-owned"))
+    if scope == "all":
+        return ownership not in {"generated", "package", "unity-generated"}
+    return ownership in {"project-owned", "repository"}
+
+
+def _runtime_list(value: object) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _runtime_animator(detail: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = detail.get("animator")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _runtime_script(detail: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = detail.get("script")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _runtime_script_names(detail: Mapping[str, Any]) -> list[str]:
+    scripts: list[str] = []
+    direct_script = _runtime_script(detail)
+    if direct_script:
+        scripts.append(_script_name(direct_script))
+    for obj in _runtime_list(detail.get("objects")):
+        for component in _runtime_list(obj.get("components")):
+            script = component.get("script")
+            if isinstance(script, Mapping):
+                scripts.append(_script_name(script))
+    return list(dict.fromkeys(value for value in scripts if value))
+
+
+def _script_name(script: Mapping[str, Any]) -> str:
+    for key in ("qualified_name", "type", "path"):
+        value = script.get(key)
+        if value:
+            if key == "path":
+                return PurePosixPath(str(value)).stem
+            return str(value)
+    return ""
+
+
+def _runtime_event_names(detail: Mapping[str, Any]) -> list[str]:
+    values: list[str] = []
+    raw_events = detail.get("event_bindings", detail.get("unity_events"))
+    for event in _runtime_list(raw_events):
+        owner = event.get("owner_path") or event.get("target_path") or "object"
+        target_type = event.get("target_type") or event.get("target_script")
+        method = event.get("method")
+        if method:
+            callee = f"{target_type}.{method}()" if target_type else f"{method}()"
+            values.append(f"{owner} → {callee}")
+    return list(dict.fromkeys(values))
+
+
+def _build_scene_paths(manifest: Manifest) -> set[str]:
+    return {
+        str(scene.get("path"))
+        for scene in manifest.project.get("scenes", [])
+        if scene.get("enabled") and scene.get("path")
+    }
+
+
+def _detail_has_unity_runtime_signal(
+    entry: FileEntry,
+    detail: Mapping[str, Any],
+    manifest: Manifest,
+) -> bool:
+    if PurePosixPath(entry.path).suffix.lower() not in UNITY_RUNTIME_SUFFIXES:
+        return False
+    if not detail or not _runtime_scope_allows(entry, detail, manifest):
+        return False
+    if detail.get("status", "parsed") != "parsed":
+        return False
+
+    kind = str(detail.get("kind", ""))
+    if entry.path in _build_scene_paths(manifest):
+        return True
+    if _runtime_script_names(detail) or _runtime_event_names(detail):
+        return True
+    try:
+        if int(detail.get("script_component_count", 0) or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if kind in {"script", "scriptable_object"} and _runtime_script(detail):
+        return True
+    animator = _runtime_animator(detail)
+    if kind in {"animator_controller", "override_controller"} and any(
+        _runtime_list(animator.get(key)) for key in ("layers", "states", "blend_trees")
+    ):
+        return True
+    try:
+        return int(detail.get("high_signal", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_unity_runtime_signal(entry: FileEntry, manifest: Manifest) -> bool:
+    return _detail_has_unity_runtime_signal(entry, _unity_runtime(entry), manifest)
+
+
+def _unity_output_limits(manifest: Manifest) -> tuple[int, int]:
+    runtime = _unity_runtime_project(manifest)
+    candidates = [
+        runtime.get("config"),
+        runtime.get("agents_limits"),
+        runtime.get("limits"),
+        manifest.project.get("config"),
+        manifest.project,
+    ]
+
+    def configured(name: str, short_name: str, compact_name: str, default: int) -> int:
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            raw = candidate.get(name, candidate.get(short_name, candidate.get(compact_name)))
+            if isinstance(raw, bool):
+                continue
+            if isinstance(raw, int):
+                value = raw
+            elif isinstance(raw, str) and raw.isdigit():
+                value = int(raw)
+            else:
+                continue
+            if value > 0:
+                return value
+        return default
+
+    return (
+        configured(
+            "unity_agents_asset_limit",
+            "asset_limit",
+            "assets",
+            DEFAULT_UNITY_ASSET_LIMIT,
+        ),
+        configured(
+            "unity_agents_object_limit",
+            "object_limit",
+            "objects",
+            DEFAULT_UNITY_OBJECT_LIMIT,
+        ),
+    )
+
+
+def _runtime_kind_label(detail: Mapping[str, Any]) -> str:
+    labels = {
+        "scene": "Scene",
+        "prefab": "Prefab",
+        "script": "ScriptableObject",
+        "scriptable_object": "ScriptableObject",
+        "animator_controller": "Animator Controller",
+        "override_controller": "Animator Override Controller",
+    }
+    kind = str(detail.get("kind", "asset"))
+    return labels.get(kind, kind.replace("_", " ").title())
+
+
+def _runtime_responsibility(entry: FileEntry, detail: Mapping[str, Any]) -> str:
+    documented = detail.get("responsibility")
+    if documented:
+        return str(documented)
+
+    kind = str(detail.get("kind", "asset"))
+    name = PurePosixPath(entry.path).stem
+    roots = _runtime_root_names(detail)
+    scripts = _runtime_script_names(detail)
+    events = _runtime_event_names(detail)
+    animator = _runtime_animator(detail)
+    clauses: list[str] = []
+    if roots:
+        clauses.append("root objects " + ", ".join(f"`{value}`" for value in roots[:3]))
+    if scripts:
+        clauses.append("wires " + ", ".join(f"`{value}`" for value in scripts[:3]))
+    if events:
+        clauses.append("binds " + ", ".join(f"`{value}`" for value in events[:2]))
+
+    if kind == "scene":
+        lead = f"Unity scene `{name}` defining the serialized runtime hierarchy"
+    elif kind == "prefab":
+        lead = f"Reusable Unity prefab `{name}` defining a serialized object hierarchy"
+    elif kind in {"script", "scriptable_object"}:
+        script = _script_name(_runtime_script(detail)) or "resolved ScriptableObject type"
+        lead = f"Serialized `{script}` data instance `{name}`"
+    elif kind in {"animator_controller", "override_controller"}:
+        state_count = len(_runtime_list(animator.get("states")))
+        layer_count = len(_runtime_list(animator.get("layers")))
+        lead = (
+            f"Animator controller `{name}` defining {layer_count} layer(s), "
+            f"{state_count} state(s)"
+        )
+    else:
+        lead = f"Serialized Unity runtime asset `{name}`"
+    return lead + ("; " + "; ".join(clauses) if clauses else "") + "."
+
+
+def _runtime_root_names(detail: Mapping[str, Any]) -> list[str]:
+    objects = _runtime_list(detail.get("objects"))
+    objects_by_id = {str(item.get("file_id")): item for item in objects if item.get("file_id")}
+    raw_roots = detail.get("root_objects", detail.get("roots"))
+    names: list[str] = []
+    if isinstance(raw_roots, list):
+        for raw in raw_roots:
+            item: Mapping[str, Any] | None
+            item = raw if isinstance(raw, Mapping) else objects_by_id.get(str(raw))
+            if item:
+                name = item.get("path") or item.get("name")
+                if name:
+                    names.append(str(name))
+    if not names:
+        names = [
+            str(item.get("path") or item.get("name"))
+            for item in objects
+            if item.get("parent_file_id") is None and (item.get("path") or item.get("name"))
+        ]
+    return list(dict.fromkeys(names))
+
+
+def _runtime_asset_score(
+    entry: FileEntry,
+    detail: Mapping[str, Any],
+    manifest: Manifest,
+) -> int:
+    try:
+        score = int(detail.get("high_signal", 0) or 0)
+    except (TypeError, ValueError):
+        score = 0
+    score += len(_runtime_script_names(detail)) * 20
+    score += len(_runtime_event_names(detail)) * 30
+    animator = _runtime_animator(detail)
+    score += len(_runtime_list(animator.get("states"))) * 2
+    score += len(_runtime_list(animator.get("transitions")))
+    if entry.path in _build_scene_paths(manifest):
+        score += 50
+    return score
+
+
+def _runtime_asset_preview(detail: Mapping[str, Any], limit: int) -> str:
+    items: list[str] = []
+    objects = _runtime_list(detail.get("objects"))
+    object_names = [str(item.get("path") or item.get("name")) for item in objects]
+    scripts = _runtime_script_names(detail)
+    components = [
+        str(component.get("type"))
+        for item in objects
+        for component in _runtime_list(item.get("components"))
+        if component.get("type")
+    ]
+    events = _runtime_event_names(detail)
+    animator = _runtime_animator(detail)
+    states = [str(item.get("name")) for item in _runtime_list(animator.get("states"))]
+    parameters = [str(item.get("name")) for item in _runtime_list(animator.get("parameters"))]
+    references = [
+        str(item.get("target"))
+        for item in _runtime_list(detail.get("references"))
+        if item.get("target")
+    ]
+
+    sources = [
+        ("events", events),
+        ("scripts", scripts),
+        ("states", states),
+        ("parameters", parameters),
+        ("objects", object_names),
+        ("components", components),
+        ("references", references),
+    ]
+    remaining = max(1, limit)
+    for label, values in sources:
+        unique = list(dict.fromkeys(value for value in values if value))
+        if not unique or remaining <= 0:
+            continue
+        take = min(len(unique), 2, remaining)
+        shown = ", ".join(f"`{value}`" for value in unique[:take])
+        items.append(f"{label}: {shown}")
+        remaining -= take
+
+    counts = []
+    for key, label in (
+        ("object_count", "objects"),
+        ("component_count", "components"),
+        ("script_component_count", "project scripts"),
+    ):
+        value = detail.get(key)
+        if value:
+            counts.append(f"{value} {label}")
+    prefix = ", ".join(counts)
+    if prefix and items:
+        return prefix + "; " + "; ".join(items)
+    return prefix or "; ".join(items) or "Parsed runtime asset; no named semantic preview."
+
+
+def _markdown_path(path: str) -> str:
+    return "/".join(quote(part, safe="._-~") for part in PurePosixPath(path).parts)
+
+
+def _unity_runtime_assets_section(
+    entries: list[FileEntry],
+    manifest: Manifest,
+) -> list[str]:
+    asset_limit, object_limit = _unity_output_limits(manifest)
+    ranked = sorted(
+        entries,
+        key=lambda entry: (
+            -_runtime_asset_score(entry, _unity_runtime(entry), manifest),
+            entry.path,
+        ),
+    )
+    lines = [
+        "### Unity runtime assets",
+        "",
+        "| Asset | Kind | Verified responsibility | Runtime topology and bindings |",
+        "|---|---|---|---|",
+    ]
+    for entry in ranked[:asset_limit]:
+        detail = _unity_runtime(entry)
+        filename = PurePosixPath(entry.path).name
+        destination = quote(filename, safe="._-~")
+        lines.append(
+            f"| [`{_cell(filename)}`]({destination}) | {_cell(_runtime_kind_label(detail))} | "
+            f"{_cell(_runtime_responsibility(entry, detail))} | "
+            f"{_cell(_runtime_asset_preview(detail, object_limit))} |"
+        )
+    if len(ranked) > asset_limit:
+        lines.append(
+            f"| … | — | {len(ranked) - asset_limit} lower-signal runtime assets omitted "
+            "from this token-optimized map. | Use `better-context-unity unity list` "
+            "or `unity show <project-relative-asset>` for full detail. |"
+        )
+    lines.extend(
+        [
+            "",
+            "Full hierarchy and serialized evidence: "
+            "`better-context-unity unity show <project-relative-asset> --depth -1`.",
+            "",
+        ]
+    )
+    return lines
+
+
+def _root_unity_runtime(manifest: Manifest) -> list[str]:
+    runtime = _unity_runtime_project(manifest)
+    if not runtime:
+        return []
+    metrics_value = runtime.get("metrics")
+    coverage_value = runtime.get("coverage")
+    metrics = metrics_value if isinstance(metrics_value, Mapping) else {}
+    coverage = coverage_value if isinstance(coverage_value, Mapping) else {}
+    lines = ["", "### Unity runtime intelligence", ""]
+    lines.append(
+        "- "
+        + ", ".join(
+            [
+                f"{metrics.get('scenes', 0)} scenes",
+                f"{metrics.get('prefabs', 0)} prefabs",
+                f"{metrics.get('scriptable_objects', 0)} ScriptableObjects",
+                f"{metrics.get('animator_controllers', 0)} Animator controllers",
+                f"{metrics.get('game_objects', 0)} GameObjects",
+                f"{metrics.get('components', 0)} components",
+                f"{metrics.get('script_components', 0)} project-script usages",
+                f"{metrics.get('unity_events', metrics.get('event_bindings', 0))} "
+                "UnityEvent bindings",
+                f"{metrics.get('animator_states', 0)} Animator states",
+            ]
+        )
+        + "."
+    )
+    candidates = coverage.get("candidates", 0)
+    parsed = coverage.get("parsed", 0)
+    unsupported = coverage.get("unsupported", coverage.get("unsupported_serialization", 0))
+    errors = coverage.get("errors", 0)
+    lines.append(
+        f"- Parse coverage: {parsed}/{candidates} candidate assets parsed; "
+        f"{unsupported} unsupported serialization; {errors} parse errors."
+    )
+
+    ranked = [
+        (entry, detail)
+        for entry, detail in _runtime_asset_entries(manifest)
+        if _detail_has_unity_runtime_signal(entry, detail, manifest)
+    ]
+    ranked.sort(
+        key=lambda item: (-_runtime_asset_score(item[0], item[1], manifest), item[0].path)
+    )
+    if ranked:
+        lines.extend(
+            [
+                "",
+                "#### Key Unity runtime assets",
+                "",
+                "| Asset | Kind | Verified responsibility | Runtime signal |",
+                "|---|---|---|---|",
+            ]
+        )
+        _asset_limit, object_limit = _unity_output_limits(manifest)
+        for entry, detail in ranked[:ROOT_UNITY_ASSET_LIMIT]:
+            lines.append(
+                f"| [`{_cell(entry.path)}`]({_markdown_path(entry.path)}) | "
+                f"{_cell(_runtime_kind_label(detail))} | "
+                f"{_cell(_runtime_responsibility(entry, detail))} | "
+                f"{_cell(_runtime_asset_preview(detail, object_limit))} |"
+            )
+        if len(ranked) > ROOT_UNITY_ASSET_LIMIT:
+            lines.append(
+                f"| … | — | {len(ranked) - ROOT_UNITY_ASSET_LIMIT} additional semantic "
+                "runtime assets are available on demand. | "
+                "`better-context-unity unity list --limit 50` |"
+            )
+
+    lines.extend(
+        [
+            "",
+            "- Browse assets: `better-context-unity unity list "
+            "[--kind KIND] [--limit 50] [--format json|human|markdown]`.",
+            "- Inspect one hierarchy: `better-context-unity unity show "
+            "<project-relative-asset> [--depth 2|-1] [--format ...]`.",
+            "- Find persistent calls: `better-context-unity unity bindings "
+            "[--asset PATH] [--type TYPE] [--method METHOD] [--format ...]`.",
+            "",
+        ]
+    )
+    return lines
 
 
 def _map_boundary(parent: PurePosixPath) -> str | None:
@@ -188,8 +669,17 @@ def _render_directory(
         for entry in manifest.files
         if _parent(entry.path) == rel_dir and PurePosixPath(entry.path).name != "AGENTS.md"
     ]
-    visible_files = [entry for entry in direct_files if not entry.path.endswith(".meta")]
-    metadata_count = len(direct_files) - len(visible_files)
+    runtime_files = [
+        entry
+        for entry in direct_files
+        if _has_unity_runtime_signal(entry, manifest)
+    ]
+    visible_files = [
+        entry
+        for entry in direct_files
+        if not entry.path.endswith(".meta") and not _unity_runtime(entry)
+    ]
+    metadata_count = sum(entry.path.endswith(".meta") for entry in direct_files)
     children = sorted(value for value in directories if value and _parent(value) == rel_dir)
     title = (
         "Unity project map" if not rel_dir and unity else f"Folder map: {rel_dir or 'repository'}"
@@ -217,10 +707,13 @@ def _render_directory(
             lines.append(row + " |")
         lines.append("")
 
+    if runtime_files:
+        lines.extend(_unity_runtime_assets_section(runtime_files, manifest))
+
     if visible_files or metadata_count:
         lines.extend(
             [
-                "### Files and public surface",
+                "### Source and configuration surface",
                 "",
                 "| File | Boundary | Verified responsibility | Key public API | "
                 "Named dependencies / dependents | Ca/Ce/I/A/D |",
@@ -321,8 +814,6 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
             if unity
             else "Navigation map for the repository."
         )
-    if name in purposes:
-        return purposes[name]
     prefix = path.rstrip("/") + "/" if path else ""
     source_files = [
         entry
@@ -354,6 +845,28 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
         for entry in manifest.files
         if entry.path.startswith(prefix) and not entry.path.endswith("AGENTS.md")
     ]
+    runtime_assets = [
+        (entry, _unity_runtime(entry))
+        for entry in files
+        if _has_unity_runtime_signal(entry, manifest)
+    ]
+    if runtime_assets:
+        kinds = Counter(_runtime_kind_label(detail) for _entry, detail in runtime_assets)
+        scripts = list(
+            dict.fromkeys(
+                script
+                for _entry, detail in runtime_assets
+                for script in _runtime_script_names(detail)
+            )
+        )
+        purpose = "Unity runtime asset module containing " + ", ".join(
+            f"{count} {kind}" for kind, count in kinds.most_common(4)
+        )
+        if scripts:
+            purpose += "; verified project scripts include " + ", ".join(scripts[:5])
+        return purpose + "."
+    if name in purposes:
+        return purposes[name]
     if files:
         kinds = Counter(
             PurePosixPath(entry.path).suffix.lower() or "extensionless" for entry in files
@@ -363,7 +876,10 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
     return f"Repository module at `{path}`."
 
 
-def _file_role(entry: FileEntry, graph: DependencyGraph) -> str:
+def _file_role(entry: FileEntry, graph: DependencyGraph | _EmptyGraph) -> str:
+    runtime = _unity_runtime(entry)
+    if runtime:
+        return _runtime_responsibility(entry, runtime)
     suffix = PurePosixPath(entry.path).suffix.lower()
     if suffix == ".cs":
         types = [chunk for chunk in entry.chunks if chunk.type != "method"]
@@ -443,6 +959,7 @@ def _root_intelligence(manifest: Manifest) -> list[str]:
         f"project-owned edges: {metrics.get('project_owned_dependencies', 0)}; "
         f"project-owned circular components: {metrics.get('project_owned_cycles', 0)}."
     )
+    lines.extend(_root_unity_runtime(manifest))
     lines.extend(_key_files(manifest))
     lines.extend(_architecture_summary(manifest))
     lines.extend(_cycle_summary(manifest))
@@ -457,8 +974,8 @@ def _root_intelligence(manifest: Manifest) -> list[str]:
             '- Token budget: `better-context-unity optimize --budget 8000 --task "<task>"`.',
                 "- Semantic anchors shown beside public APIs remain stable across file "
                 "moves when logic is unchanged.",
-                "- Asset-only prefab/material/data directories are collapsed from the map; "
-                "their exact GUID relationships remain available in the manifest and focus output.",
+                "- Pure art, vendor, and runtime assets without semantic signal are collapsed; "
+                "use the `unity` commands above for complete object-level evidence.",
                 "",
             ]
         )
@@ -572,13 +1089,17 @@ def _cycle_summary(manifest: Manifest) -> list[str]:
 
 def _feature_flows(manifest: Manifest) -> list[str]:
     ownership = {entry.path: entry.metadata.get("ownership") for entry in manifest.files}
-    calls = [
-        item
-        for item in manifest.graph.call_graph
-        if item.get("source") != item.get("target")
-        and ownership.get(item.get("source")) in {"project-owned", "repository"}
-        and ownership.get(item.get("target")) in {"project-owned", "repository"}
-    ]
+    calls: list[dict[str, object]] = []
+    for item in manifest.graph.call_graph:
+        source = item.get("source")
+        target = item.get("target")
+        if not isinstance(source, str) or not isinstance(target, str) or source == target:
+            continue
+        if ownership.get(source) not in {"project-owned", "repository"}:
+            continue
+        if ownership.get(target) not in {"project-owned", "repository"}:
+            continue
+        calls.append(item)
     lines = ["### Observed feature flow (resolved calls)", ""]
     if not calls:
         return lines + ["No cross-file call chain was resolved.", ""]
@@ -616,8 +1137,8 @@ def _feature_flows(manifest: Manifest) -> list[str]:
         round_index += 1
     for item in selected:
         lines.append(
-            f"- `{_short_symbol(item.get('callerName', ''))}` → "
-            f"`{_short_symbol(item.get('calleeName', ''))}` "
+            f"- `{_short_symbol(str(item.get('callerName', '')))}` → "
+            f"`{_short_symbol(str(item.get('calleeName', '')))}` "
             f"(`{item.get('source')}`:{item.get('line')} → `{item.get('target')}`)."
         )
     lines.extend(
@@ -707,6 +1228,9 @@ def _verified_responsibility(entry: FileEntry) -> str:
     documented = next((chunk.docstring for chunk in entry.chunks if chunk.docstring), None)
     if documented:
         return documented
+    runtime = _unity_runtime(entry)
+    if runtime:
+        return _runtime_responsibility(entry, runtime)
     suffix = PurePosixPath(entry.path).suffix.lower()
     if suffix == ".cs":
         types = [
@@ -818,18 +1342,32 @@ def _local_calls(rel_dir: str, manifest: Manifest) -> list[str]:
 
 
 def _local_asset_references(rel_dir: str, manifest: Manifest) -> list[str]:
+    runtime_kinds = {
+        "animator_motion",
+        "prefab_instance",
+        "scriptable_object_type",
+        "serialized_guid",
+        "unity_component",
+        "unity_event",
+    }
     refs = [
         item
         for item in manifest.graph.edge_details
-        if _parent(item.get("source", "")) == rel_dir and "serialized_guid" in item.get("kinds", [])
+        if _parent(item.get("source", "")) == rel_dir
+        and runtime_kinds.intersection(item.get("kinds", []))
     ]
     if not refs:
         return []
-    lines = ["### Unity serialized references", ""]
+    lines = ["### Unity runtime references", ""]
     for item in refs[:15]:
-        lines.append(f"- `{item['source']}` → `{item['target']}` (exact GUID).")
+        kinds = ", ".join(sorted(runtime_kinds.intersection(item.get("kinds", []))))
+        evidence = item.get("field") or item.get("owner_path") or item.get("symbol")
+        evidence_text = f"; `{evidence}`" if evidence else ""
+        lines.append(
+            f"- `{item['source']}` → `{item['target']}` ({kinds or 'resolved'}{evidence_text})."
+        )
     if len(refs) > 15:
-        lines.append(f"- +{len(refs) - 15} more exact GUID references in the manifest.")
+        lines.append(f"- +{len(refs) - 15} more verified Unity references in the manifest.")
     lines.append("")
     return lines
 

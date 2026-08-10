@@ -46,6 +46,9 @@ class TestManifestMeta:
         assert meta.config_hash == "abc123"
         assert meta.generated_at  # Should be non-empty ISO timestamp
 
+    def test_unity_runtime_schema_version(self):
+        assert MANIFEST_VERSION == "1.2.0"
+
 
 class TestChunkEntry:
     """Tests for ChunkEntry dataclass."""
@@ -224,6 +227,40 @@ class TestManifestSerialization:
             loaded = load_manifest(path)
             assert loaded.meta.version == MANIFEST_VERSION
             assert loaded.meta.config_hash == "config-hash"
+
+    def test_unity_runtime_data_round_trip(self):
+        """Compact project data and full per-file topology remain lossless."""
+        meta = create_manifest_meta(Path("/tmp/unity"), "config-hash")
+        runtime = {
+            "path": "Assets/UI/Button.prefab",
+            "kind": "prefab",
+            "objects": [{"path": "Canvas/Button", "components": ["ButtonView"]}],
+        }
+        manifest = Manifest(
+            meta=meta,
+            files=[
+                FileEntry(
+                    path="Assets/UI/Button.prefab",
+                    language="unity-yaml",
+                    size_bytes=100,
+                    hash="hash",
+                    metadata={"unity_runtime": runtime},
+                )
+            ],
+            project={
+                "unity_runtime": {
+                    "assets": [{"path": runtime["path"], "kind": "prefab"}],
+                    "event_bindings": [],
+                    "metrics": {"assets": 1},
+                    "coverage": {"eligible": 1, "parsed": 1},
+                }
+            },
+        )
+
+        restored = dict_to_manifest(manifest_to_dict(manifest))
+
+        assert restored.project["unity_runtime"]["metrics"]["assets"] == 1
+        assert restored.files[0].metadata["unity_runtime"] == runtime
 
 
 class TestManifestValidation:
