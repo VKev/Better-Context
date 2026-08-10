@@ -250,6 +250,7 @@ def test_monoscript_get_class_resolves_ui_component_and_sprite(tmp_path: Path) -
     assert component["qualified_type"] == "UnityEngine.UI.Image"
     assert component["boundary"] == "package"
     assert component["provenance"] == "unity-editor-monoscript"
+    assert component["script"]["unity_type"] == "MonoBehaviour"
     assert component["fields"]["m_FillMethod"] == 1
     assert component["fields"]["m_PreserveAspect"] is True
     canvas = analysis.assets["Assets/Button.prefab"]["objects"][0]["components"][1]

@@ -1062,7 +1062,10 @@ def _selected_component_fields(
             or _inline_reference(value)
         ):
             continue
-        result[name] = _typed_scalar(value)
+        result[name] = _typed_scalar(
+            value,
+            boolean=name in _BOOLEAN_COMPONENT_FIELDS,
+        )
         if len(result) >= 12:
             break
     return result
@@ -1675,7 +1678,7 @@ def _editor_script_result(
             "path": _normalize(str(editor_script.get("path", result.get("path", "")))),
             "type": qualified.rsplit(".", 1)[-1],
             "qualified_name": qualified,
-            "unity_type": str(editor_script.get("base_type", "")).rsplit(".", 1)[-1],
+            "unity_type": _editor_unity_type(editor_script),
             "assembly": str(editor_script.get("assembly", "")),
             "boundary": str(editor_script.get("boundary", "")),
             "confidence": "exact",
@@ -1683,6 +1686,16 @@ def _editor_script_result(
         }
     )
     return result
+
+
+def _editor_unity_type(editor_script: dict[str, Any]) -> str:
+    """Collapse an exact Editor type chain into a stable Unity serialization category."""
+    base_type = str(editor_script.get("base_type", ""))
+    if "ScriptableObject" in base_type:
+        return "ScriptableObject"
+    if "StateMachineBehaviour" in base_type:
+        return "StateMachineBehaviour"
+    return "MonoBehaviour"
 
 
 def _resolve_external_event_target(
