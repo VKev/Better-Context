@@ -7,19 +7,11 @@ import json
 import shutil
 import sys
 from collections import Counter
-from importlib.metadata import version as get_version
 from pathlib import Path
 from typing import Any, List, Optional
 
 from .config import load_config
-
-def _get_version() -> str:
-    """Get package version from metadata."""
-    try:
-        return get_version("better-context-unity")
-    except Exception:
-        return "1.1.0"  # Fallback for editable installs
-from .manifest import load_manifest, Manifest
+from .manifest import generator_version, load_manifest, Manifest
 from .orchestrator import Orchestrator, generate_context
 from .staleness import (
     check_staleness,
@@ -60,6 +52,11 @@ from .agents_map import (
     save_summaries,
     summary_targets,
 )
+
+
+def _get_version() -> str:
+    """Get package version from metadata."""
+    return generator_version()
 
 
 def add_common_primitive_args(parser: argparse.ArgumentParser) -> None:

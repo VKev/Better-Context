@@ -483,11 +483,12 @@ internal static class Program
             return "attribute";
         if (node.AncestorsAndSelf().OfType<BaseTypeSyntax>().Any())
             return "inheritance";
-        if (node.AncestorsAndSelf().OfType<ObjectCreationExpressionSyntax>().Any())
-            return "construct";
         var invocation = node.AncestorsAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
         if (invocation is not null && invocation.Expression.Span.Contains(node.Span))
             return "call";
+        var creation = node.AncestorsAndSelf().OfType<ObjectCreationExpressionSyntax>().FirstOrDefault();
+        if (creation is not null && creation.Type.Span.Contains(node.Span))
+            return "construct";
         if (node.AncestorsAndSelf().OfType<TypeSyntax>().Any())
             return "type";
         if (node.AncestorsAndSelf().OfType<MemberAccessExpressionSyntax>().Any())

@@ -13,14 +13,25 @@ Key design principles:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+import json
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any
-import json
-from datetime import datetime, timezone
 
 # Schema version - bump on breaking changes
 MANIFEST_VERSION = "1.1.0"
+PACKAGE_VERSION_FALLBACK = "1.2.0"
+
+
+def generator_version() -> str:
+    """Return the installed package version without conflating it with the schema."""
+    try:
+        return package_version("better-context-unity")
+    except PackageNotFoundError:
+        return PACKAGE_VERSION_FALLBACK
 
 
 @dataclass
@@ -135,7 +146,7 @@ def create_manifest_meta(root: Path, config_hash: str) -> ManifestMeta:
     return ManifestMeta(
         version=MANIFEST_VERSION,
         generated_at=datetime.now(timezone.utc).isoformat(),
-        generator=f"better-context-unity/{MANIFEST_VERSION}",
+        generator=f"better-context-unity/{generator_version()}",
         root_path=root.resolve().as_posix(),
         config_hash=config_hash,
     )

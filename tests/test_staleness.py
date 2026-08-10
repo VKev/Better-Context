@@ -361,7 +361,7 @@ class TestFormatStalenessReport:
         
         report = format_staleness_report(result)
         
-        assert "✓" in report
+        assert "[ok]" in report
         assert "up-to-date" in report
 
     def test_stale_report(self):
@@ -376,7 +376,7 @@ class TestFormatStalenessReport:
         
         report = format_staleness_report(result)
         
-        assert "⚠" in report
+        assert "[stale]" in report
         assert "STALE" in report
         assert "better-context-unity agents" in report
 

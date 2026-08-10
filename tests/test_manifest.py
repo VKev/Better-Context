@@ -29,6 +29,7 @@ from better_context.manifest import (
     dict_to_manifest,
     validate_manifest,
     diff_manifests,
+    generator_version,
 )
 
 
@@ -40,7 +41,7 @@ class TestManifestMeta:
         meta = create_manifest_meta(Path("/tmp/project"), "abc123")
         
         assert meta.version == MANIFEST_VERSION
-        assert meta.generator == f"better-context-unity/{MANIFEST_VERSION}"
+        assert meta.generator == f"better-context-unity/{generator_version()}"
         assert "/tmp/project" in meta.root_path
         assert meta.config_hash == "abc123"
         assert meta.generated_at  # Should be non-empty ISO timestamp

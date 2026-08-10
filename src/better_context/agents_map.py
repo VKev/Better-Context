@@ -20,6 +20,18 @@ MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTA
 UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
 SUMMARY_FILE = ".ctx-summaries.json"
 MAX_SUMMARY_LENGTH = 240
+UNITY_LIFECYCLE_METHODS = {
+    "Awake",
+    "OnEnable",
+    "Start",
+    "FixedUpdate",
+    "Update",
+    "LateUpdate",
+    "OnDisable",
+    "OnDestroy",
+    "OnValidate",
+    "Reset",
+}
 
 
 @dataclass
@@ -112,10 +124,6 @@ def _is_map_signal_file(path: PurePosixPath) -> bool:
         ".asmdef",
         ".asmref",
         ".unity",
-        ".prefab",
-        ".asset",
-        ".controller",
-        ".overridecontroller",
         ".json",
         ".uxml",
         ".uss",
@@ -321,7 +329,17 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
     if declarations:
         listed = ", ".join(declarations[:4])
         suffix = "…" if len(declarations) > 4 else ""
-        return f"Source module declaring {listed}{suffix}."
+        operations = [
+            chunk.name
+            for entry in source_files
+            for chunk in entry.chunks
+            if chunk.type in {"method", "operator"} and chunk.name not in UNITY_LIFECYCLE_METHODS
+        ]
+        operation_text = ""
+        if operations:
+            unique = list(dict.fromkeys(operations))
+            operation_text = "; verified operations include " + ", ".join(unique[:5])
+        return f"Unity source module defining {listed}{suffix}{operation_text}."
     files = [
         entry
         for entry in manifest.files
@@ -376,9 +394,11 @@ def _root_intelligence(manifest: Manifest) -> list[str]:
         scenes = project.get("scenes", [])
         if scenes:
             enabled = [item["path"] for item in scenes if item.get("enabled")]
+            owned = [item["path"] for item in scenes if item.get("ownership") == "project-owned"]
             lines.append(
-                f"- Build scenes ({len(enabled)} enabled): "
-                + ", ".join(f"`{p}`" for p in enabled[:8])
+                f"- Scene assets: {len(scenes)} total, {len(owned)} project-owned, "
+                f"{len(enabled)} enabled in Build Settings"
+                + ("; project scenes: " + ", ".join(f"`{p}`" for p in owned[:8]) if owned else "")
                 + "."
             )
         asmdefs = project.get("asmdefs", [])
@@ -426,11 +446,13 @@ def _root_intelligence(manifest: Manifest) -> list[str]:
             "",
             "- Deep neighborhood: `better-context-unity focus <relative-file> --depth 3`.",
             '- Token budget: `better-context-unity optimize --budget 8000 --task "<task>"`.',
-            "- Semantic anchors shown beside public APIs remain stable across file "
-            "moves when logic is unchanged.",
-            "",
-        ]
-    )
+                "- Semantic anchors shown beside public APIs remain stable across file "
+                "moves when logic is unchanged.",
+                "- Asset-only prefab/material/data directories are collapsed from the map; "
+                "their exact GUID relationships remain available in the manifest and focus output.",
+                "",
+            ]
+        )
     return lines
 
 
@@ -683,15 +705,41 @@ def _verified_responsibility(entry: FileEntry) -> str:
             for chunk in entry.chunks
             if chunk.type in {"class", "interface", "struct", "record", "enum", "delegate"}
         ]
-        members = [chunk for chunk in entry.chunks if chunk.exported and chunk not in types]
         if types:
-            labels = [
-                f"{chunk.name} ({chunk.metadata.get('unity_type')})"
+            labels = [f"`{chunk.name}`" for chunk in types[:3]]
+            unity_types = {
+                chunk.metadata.get("unity_type")
+                for chunk in types
                 if chunk.metadata.get("unity_type")
-                else chunk.name
-                for chunk in types[:3]
+            }
+            if "MonoBehaviour" in unity_types:
+                subject = "Unity component"
+            elif "ScriptableObject" in unity_types:
+                subject = "Unity data asset type"
+            elif "StateMachineBehaviour" in unity_types:
+                subject = "Unity Animator state behaviour"
+            elif all(chunk.type == "interface" for chunk in types):
+                subject = "Contract"
+            else:
+                subject = "C# type"
+            methods = [chunk.name for chunk in entry.chunks if chunk.type in {"method", "operator"}]
+            lifecycle = list(
+                dict.fromkeys(name for name in methods if name in UNITY_LIFECYCLE_METHODS)
+            )
+            operations = list(
+                dict.fromkeys(name for name in methods if name not in UNITY_LIFECYCLE_METHODS)
+            )
+            facts = [f"{subject} defining {', '.join(labels)}"]
+            if lifecycle:
+                facts.append("lifecycle " + ", ".join(f"`{name}`" for name in lifecycle[:4]))
+            if operations:
+                facts.append("implements " + ", ".join(f"`{name}`" for name in operations[:5]))
+            public_members = [
+                chunk for chunk in entry.chunks if chunk.exported and chunk not in types
             ]
-            return f"Declares {', '.join(labels)}; exposes {len(members)} public/protected members."
+            if not lifecycle and not operations and public_members:
+                facts.append(f"exposes {len(public_members)} public/protected data members")
+            return "; ".join(facts) + "."
         return "C# source with no declaration resolved by the active analyzer."
     return _file_role(entry, _EmptyGraph())
 

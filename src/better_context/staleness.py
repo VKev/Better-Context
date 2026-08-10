@@ -342,7 +342,7 @@ def format_staleness_report(result: StalenessResult, verbose: bool = False) -> s
     lines = []
     
     if result.is_stale:
-        lines.append(f"⚠ {result.summary}")
+        lines.append(f"[stale] {result.summary}")
         lines.append("")
         
         if verbose or result.total_changes <= 10:
@@ -370,7 +370,7 @@ def format_staleness_report(result: StalenessResult, verbose: bool = False) -> s
         lines.append("")
         lines.append("Run 'better-context-unity agents' to update.")
     else:
-        lines.append(f"✓ {result.summary}")
+        lines.append(f"[ok] {result.summary}")
     
     return "\n".join(lines)
 

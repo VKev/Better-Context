@@ -53,6 +53,7 @@ public sealed class Dependency
 {
     public void Run() { }
     public static void Ping() { }
+    public static int Value() => 1;
 }
 """,
         encoding="utf-8",
@@ -66,6 +67,10 @@ public sealed class MarkedAttribute : Attribute { }
     )
     (scripts / "BaseConsumer.cs").write_text(
         "namespace Fixture; public abstract class BaseConsumer { }\n", encoding="utf-8"
+    )
+    (scripts / "Box.cs").write_text(
+        "namespace Fixture; public sealed class Box { public Box(int value) { } }\n",
+        encoding="utf-8",
     )
     (scripts / "Amount.cs").write_text(
         """namespace Fixture;
@@ -94,6 +99,7 @@ public sealed class Consumer : BaseConsumer
     {
         Current.Run();
         Dependency.Ping();
+        _ = new Box(Dependency.Value());
         var total = new Amount(1) + new Amount(2);
         _ = (int)total;
         Completed?.Invoke();
@@ -108,6 +114,10 @@ public sealed class Consumer : BaseConsumer
     )
     (vendor / "SystemFragment.cs").write_text(
         "namespace System; public static class SourceMarker { }\n",
+        encoding="utf-8",
+    )
+    (vendor / "PerformanceTest.cs").write_text(
+        "namespace UniRx; public sealed class PerformanceTest { }\n",
         encoding="utf-8",
     )
     (root / "Assets" / "System.meta").write_text(
@@ -138,6 +148,13 @@ def test_roslyn_filters_false_positives_and_extracts_public_surface(
     assert not any(source.endswith(".cs") and target.endswith(".meta") for source, target in edges)
     assert (consumer, "Assets/Plugins/UniRx/Range.cs") not in edges
     assert (consumer, "Assets/Plugins/UniRx/SystemFragment.cs") not in edges
+    dependency_detail = next(
+        item
+        for item in result.manifest.graph.edge_details
+        if item["source"] == consumer and item["target"] == "Assets/Scripts/Dependency.cs"
+    )
+    assert "call" in dependency_detail["kinds"]
+    assert "construct" not in dependency_detail["kinds"]
 
     amount = next(entry for entry in result.manifest.files if entry.path.endswith("Amount.cs"))
     assert sum(chunk.type == "operator" for chunk in amount.chunks) == 2
@@ -186,9 +203,13 @@ def test_unity_guid_edges_and_rich_agents_map(semantic_unity_project: Path):
     assert "@" in scripts_map
     assert "Never treated as C# dependencies" in assets_map
     assert "Semantic Game" in root_map
+    assert "Scene assets: 1 total, 1 project-owned, 1 enabled" in root_map
+    assert "implements `Execute`" in scripts_map
+    assert "No project test file was detected" in root_map
     assert (semantic_unity_project / "Assets" / "Plugins" / "AGENTS.md").is_file()
     assert not (semantic_unity_project / "Assets" / "Plugins" / "UniRx" / "AGENTS.md").exists()
     assert not (semantic_unity_project / "Assets" / "Art" / "Icons" / "AGENTS.md").exists()
+    assert not (semantic_unity_project / "Assets" / "Prefabs" / "AGENTS.md").exists()
 
 
 def test_manifest_records_exact_edge_evidence(semantic_unity_project: Path):

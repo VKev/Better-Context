@@ -78,7 +78,7 @@ def collect_project_facts(root: Path, paths: Iterable[str]) -> dict[str, Any]:
         "generated_roots": _ownership_roots(normalized_paths, "generated"),
     }
     if not unity:
-        facts["test_files"] = _test_files(normalized_paths)
+        facts["test_files"] = _project_test_files(normalized_paths)
         return facts
 
     facts.update(
@@ -86,9 +86,10 @@ def collect_project_facts(root: Path, paths: Iterable[str]) -> dict[str, Any]:
             "unity_version": _unity_version(root),
             **_player_settings(root),
             "packages": _packages(root),
-            "scenes": _build_scenes(root),
+            "scenes": _scenes(root, normalized_paths),
             "asmdefs": _asmdefs(root, normalized_paths),
-            "test_files": _test_files(normalized_paths),
+            "test_files": _project_test_files(normalized_paths),
+            "vendor_test_files": _vendor_test_files(normalized_paths),
         }
     )
     return facts
@@ -221,6 +222,23 @@ def _build_scenes(root: Path) -> list[dict[str, Any]]:
     return scenes
 
 
+def _scenes(root: Path, paths: Iterable[str]) -> list[dict[str, Any]]:
+    """List every scene asset and distinguish build scenes from samples/vendor scenes."""
+    build = {item["path"]: item["enabled"] for item in _build_scenes(root)}
+    scene_paths = {path for path in paths if PurePosixPath(path).suffix.lower() == ".unity"} | set(
+        build
+    )
+    return [
+        {
+            "path": path,
+            "enabled": bool(build.get(path, False)),
+            "in_build": path in build,
+            "ownership": classify_ownership(path),
+        }
+        for path in sorted(scene_paths)
+    ]
+
+
 def _asmdefs(root: Path, paths: Iterable[str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for relative in paths:
@@ -257,6 +275,14 @@ def _test_files(paths: Iterable[str]) -> list[str]:
         ):
             results.append(path)
     return results[:200]
+
+
+def _project_test_files(paths: Iterable[str]) -> list[str]:
+    return [path for path in _test_files(paths) if classify_ownership(path) == "project-owned"]
+
+
+def _vendor_test_files(paths: Iterable[str]) -> list[str]:
+    return [path for path in _test_files(paths) if classify_ownership(path) == "vendor"]
 
 
 def _ownership_roots(paths: Iterable[str], ownership: str) -> list[str]:
