@@ -20,7 +20,7 @@ import json
 from datetime import datetime, timezone
 
 # Schema version - bump on breaking changes
-MANIFEST_VERSION = "1.0.0"
+MANIFEST_VERSION = "1.1.0"
 
 
 @dataclass
@@ -83,6 +83,7 @@ class FileEntry:
     chunks: list[ChunkEntry] = field(default_factory=list)  # Code chunks in this file
     imports: list[ImportEntry] = field(default_factory=list)  # Import statements
     exports: list[ExportEntry] = field(default_factory=list)  # Export statements
+    metadata: dict[str, Any] = field(default_factory=dict)  # Ownership and analyzer facts
 
 
 @dataclass
@@ -94,6 +95,10 @@ class GraphData:
     centrality: dict[str, float] = field(default_factory=dict)  # PageRank scores
     layers: list[list[str]] = field(default_factory=list)  # Topological layers
     cycles: list[list[str]] = field(default_factory=list)  # Detected cycles (SCCs > 1)
+    edge_details: list[dict[str, Any]] = field(default_factory=list)
+    call_graph: list[dict[str, Any]] = field(default_factory=list)
+    coupling: dict[str, dict[str, Any]] = field(default_factory=dict)
+    architecture: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,6 +119,7 @@ class Manifest:
     files: list[FileEntry] = field(default_factory=list)
     graph: GraphData = field(default_factory=GraphData)
     errors: list[ParseError] = field(default_factory=list)
+    project: dict[str, Any] = field(default_factory=dict)
 
 
 def create_manifest_meta(root: Path, config_hash: str) -> ManifestMeta:
@@ -240,6 +246,7 @@ def dict_to_manifest(data: dict[str, Any]) -> Manifest:
                 chunks=chunks,
                 imports=imports,
                 exports=exports,
+                metadata=f.get("metadata", {}),
             )
         )
 
@@ -251,6 +258,10 @@ def dict_to_manifest(data: dict[str, Any]) -> Manifest:
         centrality=graph_data.get("centrality", {}),
         layers=graph_data.get("layers", []),
         cycles=graph_data.get("cycles", []),
+        edge_details=graph_data.get("edge_details", []),
+        call_graph=graph_data.get("call_graph", []),
+        coupling=graph_data.get("coupling", {}),
+        architecture=graph_data.get("architecture", {}),
     )
 
     # Parse errors
@@ -264,7 +275,13 @@ def dict_to_manifest(data: dict[str, Any]) -> Manifest:
         for e in data.get("errors", [])
     ]
 
-    return Manifest(meta=meta, files=files, graph=graph, errors=errors)
+    return Manifest(
+        meta=meta,
+        files=files,
+        graph=graph,
+        errors=errors,
+        project=data.get("project", {}),
+    )
 
 
 def load_manifest(path: Path) -> Manifest:

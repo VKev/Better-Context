@@ -21,6 +21,8 @@ dist/
 build/
 *.egg-info/
 .eggs/
+**/bin/
+**/obj/
 
 # IDE/Editor
 .idea/

@@ -6,6 +6,7 @@ from pathlib import Path
 from ..chunker import parse_file
 from ..languages import detect_language
 from ..scanner import is_binary_extension, is_text_file
+from ..roslyn import RoslynUnavailableError, analyze_csharp_project, discover_project_references
 from .base import FileNotFoundPrimitiveError, ParseError, timed
 
 
@@ -93,7 +94,20 @@ def _get_file_info(path: str, project_root: Path | None = None) -> FileInfoResul
         # For now error as per existing logic, or maybe allow but no chunks?
         raise ParseError(f"Unsupported language for file: {path}")
 
-    result = parse_file(str(file_path), source, language)
+    result = None
+    if language == "csharp" and project_root:
+        try:
+            relative = file_path.relative_to(base_dir).as_posix()
+            analysis = analyze_csharp_project(
+                base_dir,
+                [relative],
+                discover_project_references(base_dir),
+            )
+            result = analysis.parsed_files.get(relative)
+        except (ValueError, RoslynUnavailableError):
+            result = None
+    if result is None:
+        result = parse_file(str(file_path), source, language)
     if result.errors:
         # result.errors is a list of strings
         raise ParseError("; ".join(result.errors))

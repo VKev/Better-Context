@@ -104,8 +104,9 @@ def test_agents_map_preserves_handwritten_content_and_is_idempotent(unity_projec
     scripts_map = (unity_project / "Assets" / "Scripts" / "AGENTS.md").read_text(encoding="utf-8")
     assert "Do not replace me." in root_map
     assert root_map.count(BEGIN) == 1
-    assert "PlayerController (MonoBehaviour)" in scripts_map
-    assert "| File | Role | Summary |" not in scripts_map
+    assert "`PlayerController` (MonoBehaviour)" in scripts_map
+    assert "Named dependencies / dependents" in scripts_map
+    assert "Ca/Ce/I/A/D" in scripts_map
     assert not (unity_project / "Library" / "AGENTS.md").exists()
 
     refreshed = Orchestrator(unity_project).analyze()
@@ -150,7 +151,7 @@ def test_agents_cli_adds_and_persists_optional_summaries(unity_project: Path, ca
     scripts_map = (unity_project / "Assets" / "Scripts" / "AGENTS.md").read_text(encoding="utf-8")
     assert "| Folder | Purpose | Summary |" in assets_map
     assert "Runtime character and combat scripts." in assets_map
-    assert "| File | Role | Summary |" in scripts_map
+    assert "Verified responsibility" in scripts_map
     assert r"Coordinates player control \| damage handling." in scripts_map
 
     assert main(["--root", str(unity_project), "agents"]) == 0
@@ -182,7 +183,6 @@ def test_agents_cli_can_remove_optional_summary(unity_project: Path, capsys):
     assert not (unity_project / SUMMARY_FILE).exists()
     scripts_map = (unity_project / "Assets" / "Scripts" / "AGENTS.md").read_text(encoding="utf-8")
     assert "Applies damage." not in scripts_map
-    assert "| File | Role | Summary |" not in scripts_map
 
 
 def test_agents_cli_summary_dry_run_does_not_write(unity_project: Path):

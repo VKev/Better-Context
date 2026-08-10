@@ -1,18 +1,30 @@
 # Better Context Unity
 
-Local, dependency-free Unity/C# codebase maps for coding agents.
+Local Unity/C# codebase intelligence and hierarchical maps for coding agents.
 
 This is a Unity-focused fork of
 [`hoangnb24/better-agents-md`](https://github.com/hoangnb24/better-agents-md).
 It keeps the upstream scanner, manifest, graph, focus, and token-budget tools,
 then adds the pieces a Unity coding agent needs:
 
-- Unity project detection without reading generated `.csproj` files.
-- C# type, method, namespace, `using`, and Unity base-type extraction.
-- Approximate C# file relationships from unique referenced type names.
+- Batch Roslyn analysis for C# types, public methods, properties, events,
+  constructors, extension methods, and operator overloads.
+- Symbol-resolved C# dependencies and function calls. Comments, strings,
+  namespace names, `.meta` files, shader includes, and same-name collisions do
+  not create C# file edges.
+- Exact scene, prefab, ScriptableObject, controller, material, and script
+  relationships resolved through Unity GUIDs.
 - Unity-generated directory ignores.
-- Safe hierarchical `AGENTS.md` maps under project-owned Unity folders.
+- Safe hierarchical `AGENTS.md` maps with project facts, PageRank, public API,
+  named dependencies/dependents, call flows, coupling metrics, inferred layers,
+  cycles, layer violations, edit ownership, and validation rules.
 - Stable `/` paths on Windows.
+
+Roslyn requires a .NET 8 or newer SDK. The first C# scan builds a bundled helper
+and restores `Microsoft.CodeAnalysis.CSharp`; later scans reuse a content-hashed
+user cache. If Roslyn is unavailable, Better Context still inventories C#
+symbols with its fallback adapter but deliberately omits C# dependency/call
+edges instead of guessing from names.
 
 ## Quick start
 
@@ -23,9 +35,10 @@ uv run better-context-unity --root D:\Path\To\UnityProject agents --dry-run
 uv run better-context-unity --root D:\Path\To\UnityProject agents
 ```
 
-Maps stay structural by default. When an AI agent decides that a durable
-description would improve navigation, it can add optional summaries in the
-same call:
+Roslyn-derived responsibilities are limited to facts verified in code: declared
+types, Unity base classes, documented summaries, and exposed members. When an AI
+agent has verified a more specific business responsibility, it can persist that
+description in the same call:
 
 ```powershell
 uv run better-context-unity --root D:\Path\To\UnityProject agents `
@@ -43,8 +56,8 @@ uv run better-context-unity --root D:\Path\To\UnityProject agents `
   --remove-summary 'Assets/Scripts/GameManager.cs'
 ```
 
-The CLI does not call an LLM or invent summaries. It only validates and stores
-text explicitly supplied by the caller. Summary text is limited to 240
+The CLI does not call an LLM or invent business behavior. It only validates and
+stores text explicitly supplied by the caller. Summary text is limited to 240
 characters to keep maps compact. `--dry-run` never changes either maps or the
 summary store.
 
@@ -97,14 +110,36 @@ It does not replace stronger retrieval/editing tools:
 
 ```text
 Root-to-folder navigation and AGENTS.md refresh -> Better Context Unity
-Known symbol, call flow, dependency, blast radius -> CodeGraph
+Persistent symbol/dependency/call inventory             -> Better Context Unity
+Deep dynamic dispatch or exact edit-time call path       -> CodeGraph
 Unknown name or fuzzy business concept              -> CocoIndex
 Exact semantic edit after target discovery          -> Serena
 ```
 
-The inferred C# graph is intentionally approximate. A relationship is added
-when a C# file references a uniquely declared project type. Use CodeGraph or
-direct source verification before making behavior or refactor claims.
+Each C# edge is backed by a Roslyn-resolved source symbol and records its
+reference kind, symbol name, and source line in the manifest. Unity serialized
+edges are backed by GUID identity. Architecture layers remain explicitly
+heuristic and should not be treated as authored design intent.
+
+## Generated AGENTS.md intelligence
+
+The root map contains:
+
+- Unity/product version, build scenes, packages, asmdefs, and ownership counts.
+- Key project-owned files ranked by PageRank.
+- File/symbol/dependency/call metrics and project-owned circular components.
+- Inferred architecture layers with detailed source-to-target violations.
+- Resolved cross-file call evidence for feature flow.
+- Test/build/change rules and vendor/generated edit boundaries.
+- `focus` and token-budget `optimize` commands for deeper task context.
+
+Folder maps add verified structural responsibility, key public API with semantic
+anchors, named dependencies and dependents, Ca/Ce/I/A/D coupling metrics,
+function calls, and exact Unity serialized references. `.meta` sidecars are
+counted but hidden from file tables and can never be C# dependency targets.
+Low-signal media-only directories are not given their own maps, while vendor
+and generated trees stop at a clearly labeled boundary map. Regeneration safely
+removes only stale managed blocks left below those collapsed boundaries.
 
 ## Commands
 
@@ -115,10 +150,10 @@ direct source verification before making behavior or refactor claims.
 | `overview` | Detect Unity/C# project metadata |
 | `tree` | Show a compact directory summary |
 | `file <path>` | Extract types, methods, imports, and exports |
-| `deps <path>` | Show inferred file dependencies and dependents |
+| `deps <path>` | Show named dependencies/dependents with resolved symbols and lines |
 | `stats` | Show manifest and PageRank statistics |
 | `focus <path>` | Build context around a known file |
-| `graph` | Export Mermaid, DOT, or JSON graph data |
+| `graph [--kind dependency\|call]` | Export dependency or function-call graph as Mermaid, DOT, or JSON |
 | `optimize` | Select code chunks within a token budget |
 | `verify` | Check whether the saved manifest/map source state is stale |
 | `clean` | Remove cache/output and only this tool's managed map blocks |
@@ -159,13 +194,11 @@ generated rather than project-owned source.
 ## Development
 
 ```powershell
+dotnet build src/better_context/roslyn_helper/BetterContext.Roslyn.csproj -c Release
 uv run --extra dev pytest
 uv run --extra dev ruff check src tests
 uv run --extra dev mypy src
 ```
-
-The parser is regex-based by design: fast, local, and dependency-free. Add an
-AST parser only when measured C# accuracy requires it.
 
 ## Upstream and license
 

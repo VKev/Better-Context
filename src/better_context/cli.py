@@ -213,7 +213,13 @@ Agent Workflow:
     )
 
     # --- graph command ---
-    graph_parser = subparsers.add_parser("graph", help="Export dependency graph in standard formats")
+    graph_parser = subparsers.add_parser("graph", help="Export dependency or function-call graph")
+    graph_parser.add_argument(
+        "--kind",
+        choices=["dependency", "call"],
+        default="dependency",
+        help="Graph kind (default: dependency)",
+    )
     graph_parser.add_argument(
         "-f",
         "--format",
@@ -510,10 +516,13 @@ def cmd_agents(args: argparse.Namespace) -> int:
         action = "would update" if args.dry_run else "updated"
         print(
             f"[agents] {action} {len(result.files_written)} map(s); "
-            f"{len(result.unchanged)} unchanged"
+            f"{len(result.unchanged)} unchanged; "
+            f"{len(result.files_removed)} stale managed map(s) removed"
         )
         for path in result.files_written:
             print(f"  - {path}")
+        for path in result.files_removed:
+            print(f"  - removed managed block: {path}")
         for error in result.errors:
             print(f"[error] {error}")
         if not args.dry_run and not result.errors:
@@ -606,7 +615,7 @@ def cmd_graph(args: argparse.Namespace) -> int:
     if manifest is None:
         return 1
     
-    output = export_graph(manifest, args.format)
+    output = export_graph(manifest, args.format, args.kind)
     
     if args.output:
         args.output.write_text(output)
@@ -617,8 +626,10 @@ def cmd_graph(args: argparse.Namespace) -> int:
     return 0
 
 
-def export_graph(manifest: Manifest, fmt: str) -> str:
+def export_graph(manifest: Manifest, fmt: str, kind: str = "dependency") -> str:
     """Export graph in the specified format."""
+    if kind == "call":
+        return _export_call_graph(manifest, fmt)
     nodes = manifest.graph.nodes
     edges = manifest.graph.edges
     centrality = manifest.graph.centrality
@@ -629,6 +640,9 @@ def export_graph(manifest: Manifest, fmt: str) -> str:
             'edges': [{'from': e[0], 'to': e[1]} for e in edges],
             'centrality': centrality,
             'cycles': manifest.graph.cycles,
+            'edge_details': manifest.graph.edge_details,
+            'architecture': manifest.graph.architecture,
+            'coupling': manifest.graph.coupling,
         }, indent=2)
     
     elif fmt == 'dot':
@@ -648,34 +662,57 @@ def export_graph(manifest: Manifest, fmt: str) -> str:
         
         lines.append('}')
         return '\n'.join(lines)
-    
-    else:  # mermaid
-        lines = ['graph TD']
-        
-        # Create node ID mapping
-        node_ids = {node: f'n{i}' for i, node in enumerate(nodes)}
-        
-        # Add edges with node definitions
-        for from_file, to_file in edges:
-            from_id = node_ids[from_file]
-            to_id = node_ids[to_file]
-            from_label = Path(from_file).name
-            to_label = Path(to_file).name
-            lines.append(f'  {from_id}[{from_label}] --> {to_id}[{to_label}]')
-        
-        # Add orphan nodes (no edges)
-        connected = set()
-        for from_file, to_file in edges:
-            connected.add(from_file)
-            connected.add(to_file)
-        
-        for node in nodes:
-            if node not in connected:
-                node_id = node_ids[node]
-                label = Path(node).name
-                lines.append(f'  {node_id}[{label}]')
-        
-        return '\n'.join(lines)
+
+    lines = ['graph TD']
+    node_ids = {node: f'n{i}' for i, node in enumerate(nodes)}
+    for from_file, to_file in edges:
+        from_id = node_ids[from_file]
+        to_id = node_ids[to_file]
+        from_label = Path(from_file).name
+        to_label = Path(to_file).name
+        lines.append(f'  {from_id}[{from_label}] --> {to_id}[{to_label}]')
+    connected = {path for edge in edges for path in edge}
+    for node in nodes:
+        if node not in connected:
+            node_id = node_ids[node]
+            label = Path(node).name
+            lines.append(f'  {node_id}[{label}]')
+    return '\n'.join(lines)
+
+
+def _export_call_graph(manifest: Manifest, fmt: str) -> str:
+    calls = manifest.graph.call_graph
+    nodes: dict[str, str] = {}
+    for call in calls:
+        nodes[call.get("callerId", "")] = call.get("callerName", "")
+        nodes[call.get("calleeId", "")] = call.get("calleeName", "")
+    nodes.pop("", None)
+    if fmt == "json":
+        return json.dumps({"nodes": nodes, "calls": calls}, indent=2)
+    if fmt == "dot":
+        lines = ["digraph Calls {", "  rankdir=LR;", "  node [shape=box];"]
+        for node_id, label in nodes.items():
+            safe_id = node_id.replace('"', '\\"')
+            safe_label = label.replace('"', '\\"')
+            lines.append(f'  "{safe_id}" [label="{safe_label}"];')
+        for call in calls:
+            caller = str(call.get("callerId", "")).replace('"', '\\"')
+            callee = str(call.get("calleeId", "")).replace('"', '\\"')
+            kind = call.get("kind", "call")
+            lines.append(f'  "{caller}" -> "{callee}" [label="{kind}"];')
+        lines.append("}")
+        return "\n".join(lines)
+    node_ids = {node: f"c{index}" for index, node in enumerate(nodes)}
+    lines = ["flowchart TD"]
+    for node, local_id in node_ids.items():
+        label = nodes[node].replace('"', "'")
+        lines.append(f'  {local_id}["{label}"]')
+    for call in calls:
+        caller = node_ids.get(call.get("callerId"))
+        callee = node_ids.get(call.get("calleeId"))
+        if caller and callee:
+            lines.append(f"  {caller} -->|{call.get('kind', 'call')}| {callee}")
+    return "\n".join(lines)
 
 
 def cmd_clean(args: argparse.Namespace) -> int:

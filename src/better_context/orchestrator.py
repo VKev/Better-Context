@@ -17,9 +17,8 @@ Pipeline Flow:
 from __future__ import annotations
 
 import hashlib
-import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Any
 
@@ -37,6 +36,15 @@ from .manifest import (
 )
 from .agents_map import generate_agents_map, load_summaries
 from .staleness import save_staleness_info
+from .architecture import analyze_architecture
+from .coupling import calculate_coupling_metrics
+from .roslyn import RoslynUnavailableError, analyze_csharp_project, discover_project_references
+from .unity_intelligence import (
+    classify_ownership,
+    collect_project_facts,
+    collect_serialized_reference_edges,
+    is_unity_project,
+)
 
 
 @dataclass
@@ -101,6 +109,9 @@ class Orchestrator:
         self.root = root.resolve()
         self.config = config or load_config(self.root, config_path)
         self._progress_callback: Optional[ProgressCallback] = None
+        self._edge_details: List[Dict[str, Any]] = []
+        self._csharp_calls: List[Dict[str, Any]] = []
+        self._analysis_engine = "language-adapters"
     
     def set_progress_callback(self, callback: ProgressCallback) -> None:
         """Set a callback for progress updates.
@@ -293,9 +304,50 @@ class Orchestrator:
         inventory: FileInventory,
     ) -> tuple[Dict[str, Any], List[ParseError]]:
         """Parse all files and extract chunks/imports/exports."""
+        self._edge_details = []
+        self._csharp_calls = []
+        self._analysis_engine = "language-adapters"
         parsed: Dict[str, Any] = {}
         errors: List[ParseError] = []
         total = len(inventory.files)
+
+        csharp_files = [
+            entry for entry in inventory.files if entry.language == "csharp"
+        ]
+        if csharp_files:
+            try:
+                analysis = analyze_csharp_project(
+                    self.root,
+                    [entry.path for entry in csharp_files],
+                    discover_project_references(self.root),
+                )
+                parsed.update(analysis.parsed_files)
+                self._edge_details = [
+                    {
+                        **detail,
+                        "confidence": "exact",
+                        "engine": "roslyn",
+                    }
+                    for detail in analysis.dependencies
+                ]
+                self._csharp_calls = analysis.calls
+                self._analysis_engine = analysis.engine
+                for diagnostic in analysis.diagnostics[:100]:
+                    errors.append(ParseError(
+                        path=diagnostic.split(":", 1)[0],
+                        error_type="parse",
+                        message=diagnostic,
+                    ))
+            except RoslynUnavailableError as error:
+                self._analysis_engine = "regex-symbols-only"
+                errors.append(ParseError(
+                    path="<csharp-project>",
+                    error_type="analysis",
+                    message=(
+                        f"{error} C# dependency and call edges were omitted to avoid "
+                        "name-based false positives."
+                    ),
+                ))
         
         for i, file_info in enumerate(inventory.files):
             self._report_progress('parse', i + 1, total)
@@ -306,6 +358,11 @@ class Orchestrator:
             
             # Skip unsupported languages
             if file_info.language not in SUPPORTED_LANGUAGES:
+                continue
+
+            # Roslyn parsed C# as one compilation. Missing files fall through to
+            # the regex adapter for symbol inventory only.
+            if file_info.path in parsed:
                 continue
             
             try:
@@ -351,7 +408,10 @@ class Orchestrator:
         
         for path, parse_result in parsed_files.items():
             raw_imports = []
-            for imp in parse_result.imports:
+            # A C# using directive names a namespace, not a file. Resolving it
+            # through the generic path resolver caused System -> System.meta.
+            source_imports = [] if path.endswith(".cs") else parse_result.imports
+            for imp in source_imports:
                 raw_imports.append(RawImport(
                     specifier=imp.module,
                     symbols=imp.symbols,
@@ -363,7 +423,7 @@ class Orchestrator:
             files_imports[path] = raw_imports
         
         # Get all file paths
-        all_paths = [f.path for f in inventory.files]
+        all_paths = [f.path for f in inventory.files if not f.path.endswith("AGENTS.md")]
         
         # Build graph
         graph, resolution = build_dependency_graph(
@@ -372,40 +432,40 @@ class Orchestrator:
             self.root,
         )
 
-        self._add_csharp_reference_edges(graph, parsed_files, inventory)
+        self._add_verified_edges(graph, inventory)
         
         return resolution, graph
 
-    @staticmethod
-    def _add_csharp_reference_edges(
+    def _add_verified_edges(
+        self,
         graph: DependencyGraph,
-        parsed_files: Dict[str, Any],
         inventory: FileInventory,
     ) -> None:
-        """Infer C# file edges from uniquely declared type names."""
-        owners: Dict[str, set[str]] = {}
-        for path, parsed in parsed_files.items():
-            if not path.endswith(".cs"):
-                continue
-            for chunk in parsed.chunks:
-                if chunk.type != "method":
-                    owners.setdefault(chunk.name, set()).add(path)
+        """Add semantic C# and exact Unity GUID edges to the shared graph."""
+        for detail in self._edge_details:
+            graph.add_edge(detail["source"], detail["target"])
 
-        unique_owners = {name: next(iter(paths)) for name, paths in owners.items() if len(paths) == 1}
-        files = {entry.path: entry for entry in inventory.files}
-        for path, parsed in parsed_files.items():
-            if not path.endswith(".cs") or path not in files:
-                continue
-            try:
-                source = files[path].absolute_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            identifiers = set(re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", source))
-            declared_here = {chunk.name for chunk in parsed.chunks if chunk.type != "method"}
-            for name in identifiers - declared_here:
-                target = unique_owners.get(name)
-                if target and target != path:
-                    graph.add_edge(path, target)
+        if is_unity_project(self.root):
+            serialized = collect_serialized_reference_edges(inventory)
+            self._edge_details.extend(serialized)
+            for detail in serialized:
+                graph.add_edge(detail["source"], detail["target"])
+
+        detailed_pairs = {
+            (detail["source"], detail["target"])
+            for detail in self._edge_details
+        }
+        for source, target in graph.get_all_edges():
+            if (source, target) not in detailed_pairs:
+                self._edge_details.append({
+                    "source": source,
+                    "target": target,
+                    "kinds": ["import"],
+                    "symbols": [],
+                    "lines": [],
+                    "confidence": "resolved",
+                    "engine": "language-adapter",
+                })
     
     def _build_manifest(
         self,
@@ -447,6 +507,7 @@ class Orchestrator:
                         exported=chunk.exported,
                         docstring=chunk.docstring,
                         metadata=chunk.metadata,
+                        semantic_anchor=chunk.semantic_anchor,
                     ))
                 
                 for imp in parse_result.imports:
@@ -474,7 +535,78 @@ class Orchestrator:
                 chunks=chunks,
                 imports=imports,
                 exports=exports,
+                metadata={"ownership": classify_ownership(file_info.path)},
             ))
+
+        source_files = [
+            entry for entry in files
+            if entry.language and not entry.path.endswith("AGENTS.md")
+        ]
+        coupling = {
+            entry.path: asdict(calculate_coupling_metrics(entry.path, graph, files))
+            for entry in source_files
+        }
+        architecture_files = [
+            entry for entry in source_files
+            if entry.metadata.get("ownership") in {"project-owned", "repository"}
+        ]
+        architecture_report = analyze_architecture(architecture_files, graph)
+        architecture = {
+            "layers": architecture_report.layers,
+            "violations": [asdict(item) for item in architecture_report.violations],
+            "classifications": {
+                path: asdict(item)
+                for path, item in architecture_report.classifications.items()
+            },
+            "stats": architecture_report.stats,
+        }
+        for entry in files:
+            if entry.path in coupling:
+                entry.metadata["coupling"] = coupling[entry.path]
+            classification = architecture_report.classifications.get(entry.path)
+            if classification:
+                entry.metadata["architecture"] = asdict(classification)
+
+        analyzed_files = [entry for entry in files if not entry.path.endswith("AGENTS.md")]
+        analyzed_source_files = [entry for entry in analyzed_files if entry.language]
+        project = collect_project_facts(self.root, [entry.path for entry in analyzed_files])
+        project["analysis_engine"] = self._analysis_engine
+        ownership_by_path = {
+            entry.path: entry.metadata.get("ownership", "repository") for entry in analyzed_files
+        }
+        project_edges = [
+            (source, target)
+            for source, target in graph.get_all_edges()
+            if ownership_by_path.get(source) in {"project-owned", "repository"}
+            and ownership_by_path.get(target) in {"project-owned", "repository"}
+        ]
+        project_cycles = [
+            cycle for cycle in cycles
+            if all(
+                ownership_by_path.get(path) in {"project-owned", "repository"}
+                for path in cycle
+            )
+        ]
+        project["project_cycles"] = project_cycles
+        project["metrics"] = {
+            "files": len(analyzed_files),
+            "source_files": len(analyzed_source_files),
+            "symbols": sum(len(entry.chunks) for entry in analyzed_files),
+            "public_symbols": sum(
+                sum(1 for chunk in entry.chunks if chunk.exported) for entry in analyzed_files
+            ),
+            "dependencies": len(graph.get_all_edges()),
+            "project_owned_dependencies": len(project_edges),
+            "semantic_csharp_dependencies": sum(
+                1 for item in self._edge_details if item.get("engine") == "roslyn"
+            ),
+            "serialized_dependencies": sum(
+                1 for item in self._edge_details if "serialized_guid" in item.get("kinds", [])
+            ),
+            "call_sites": len(self._csharp_calls),
+            "cycles": len(cycles),
+            "project_owned_cycles": len(project_cycles),
+        }
         
         # Build graph data
         graph_data = GraphData(
@@ -483,6 +615,10 @@ class Orchestrator:
             centrality=centrality,
             layers=layers,
             cycles=cycles,
+            edge_details=self._edge_details,
+            call_graph=self._csharp_calls,
+            coupling=coupling,
+            architecture=architecture,
         )
         
         return Manifest(
@@ -490,6 +626,7 @@ class Orchestrator:
             files=files,
             graph=graph_data,
             errors=parse_errors,
+            project=project,
         )
 
 

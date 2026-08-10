@@ -146,73 +146,58 @@ from ..resolution import BaseResolver
 def _deps_from_manifest(file_path: Path, manifest) -> DepsResult:
     root = Path(manifest.meta.root_path)
     try:
-        rel_path = str(file_path.resolve().relative_to(root))
+        rel_path = file_path.resolve().relative_to(root).as_posix()
     except ValueError:
         rel_path = str(file_path)
 
     dependencies: list[DependencyInfo] = []
     dependents: list[DependencyInfo] = []
 
-    # Manifest graph stores edges as list of tuples (from, to)
-    # It might not store full edge metadata in the graph structure, 
-    # but let's check what's available
-    
-    # The Manifest object has graph.edges as list[tuple[str, str]]
-    # It doesn't seem to store the rich edge metadata like symbols or lines directly in graph.edges
-    # However, manifest.files contains ImportEntry which has this data!
-    
-    # Strategy: 
-    # 1. Use manifest.files to find the FileEntry for our path
-    # 2. Iterate its imports to build dependencies (richer data)
-    # 3. Use graph edges to find dependents (reverse lookup)
-    
     target_file = next((f for f in manifest.files if f.path == rel_path), None)
-    
-    # Dependencies from FileEntry (richer)
+    details = {
+        (item.get("source"), item.get("target")): item
+        for item in manifest.graph.edge_details
+    }
+
+    # Exact/resolved internal dependencies come from graph edges. Edge details
+    # preserve the Roslyn symbols and source lines that justified each edge.
+    for from_path, to_path in manifest.graph.edges:
+        if from_path != rel_path:
+            continue
+        detail = details.get((from_path, to_path), {})
+        lines = detail.get("lines", [])
+        dependencies.append(DependencyInfo(
+            path=to_path,
+            symbols=detail.get("symbols", []),
+            is_internal=True,
+            is_stdlib=False,
+            import_line=lines[0] if lines else None,
+        ))
+
+    # Preserve external package/namespace imports that have no internal edge.
     if target_file:
+        resolver = BaseResolver()
         for imp in target_file.imports:
-            # We need to resolve where this import points to
-            # But the manifest ImportEntry doesn't store the resolved path, just module name
-            # So we might need to rely on the graph edges for resolution, 
-            # or try to match them up.
-            
-            # Simple approach: Check if it looks external/stdlib using resolver logic
-            resolver = BaseResolver()
             is_external = resolver._looks_external(imp.module)
-            
-            # For now, let's use the module name as path for externals, 
-            # and try to find the resolved path for internals from graph edges
-            resolved_path = imp.module
-            
-            # Check if this import corresponds to an edge in the graph
-            # This is tricky because one file might import multiple things
-            
-            dependencies.append(DependencyInfo(
-                path=imp.module, # This is the raw module string
-                symbols=imp.symbols,
-                is_internal=not is_external,
-                is_stdlib=False, # TODO: refine this
-                import_line=imp.line
-            ))
-    else:
-        # Fallback to graph edges if file entry not found
-        for from_path, to_path in manifest.graph.edges:
-            if from_path == rel_path:
+            if is_external and all(item.path != imp.module for item in dependencies):
                 dependencies.append(DependencyInfo(
-                    path=to_path, 
-                    symbols=[],
-                    is_internal=True,
-                    import_line=None
+                    path=imp.module,
+                    symbols=imp.symbols,
+                    is_internal=False,
+                    is_stdlib=False,
+                    import_line=imp.line,
                 ))
 
     # Dependents from graph (reverse lookup)
     for from_path, to_path in manifest.graph.edges:
         if to_path == rel_path:
+            detail = details.get((from_path, to_path), {})
+            lines = detail.get("lines", [])
             dependents.append(DependencyInfo(
-                path=from_path, 
-                symbols=[],
+                path=from_path,
+                symbols=detail.get("symbols", []),
                 is_internal=True,
-                import_line=None
+                import_line=lines[0] if lines else None,
             ))
 
     return DepsResult(
