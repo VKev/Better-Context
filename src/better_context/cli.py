@@ -13,12 +13,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional
 
 from .agents_map import (
+    MAP_FILENAMES,
     SUMMARY_FILE,
     generate_agents_map,
+    is_map_path,
     load_summaries,
     normalize_summary_path,
     parse_summary_assignment,
     remove_managed_map,
+    resolve_map_filenames,
     save_summaries,
     summary_targets,
 )
@@ -81,11 +84,13 @@ def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
         prog="better-context-unity",
-        description="Local Unity/C# codebase intelligence and safe hierarchical AGENTS.md maps.",
+        description="Local Unity/C# codebase intelligence and safe hierarchical AGENTS.md/CLAUDE.md maps.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
   better-context-unity agents              Refresh Unity AGENTS.md maps
+  better-context-unity agents --map-file AGENTS.md --map-file CLAUDE.md
+                                           Refresh Codex and Claude maps from one scan
   better-context-unity scan                Generate only the manifest
   better-context-unity stats               Show codebase statistics
 
@@ -183,6 +188,17 @@ Agent Workflow:
         default=[],
         metavar="PATH",
         help="Remove a persisted summary before refreshing maps; repeatable",
+    )
+    agents_parser.add_argument(
+        "--map-file",
+        action="append",
+        default=[],
+        choices=list(MAP_FILENAMES),
+        metavar="NAME",
+        help=(
+            "Instruction file to refresh; repeatable. Overrides the 'map_files' "
+            f"config key. Supported: {', '.join(MAP_FILENAMES)} (default: AGENTS.md)"
+        ),
     )
 
     # --- overview command ---
@@ -334,7 +350,7 @@ Agent Workflow:
     clean_parser.add_argument(
         "--cache-only",
         action="store_true",
-        help="Only remove cache files, keep AGENTS.md",
+        help="Only remove cache files, keep AGENTS.md/CLAUDE.md",
     )
 
     # --- focus command ---
@@ -1192,7 +1208,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         manifest_path = orchestrator.save_manifest(result.manifest, output_path)
         save_staleness_info(
             root,
-            {entry.path: entry.content_hash for entry in result.inventory.files if not entry.path.endswith("AGENTS.md")},
+            {entry.path: entry.content_hash for entry in result.inventory.files if not is_map_path(entry.path)},
             result.manifest.meta.generated_at,
             orchestrator.config.output_dir,
         )
@@ -1255,6 +1271,8 @@ def cmd_agents(args: argparse.Namespace) -> int:
         if not args.dry_run:
             manifest_path = orchestrator.save_manifest(analysis.manifest)
             print(f"[agents] Manifest saved to {manifest_path}")
+        map_filenames = resolve_map_filenames(args.map_file or config.map_files)
+        print(f"[agents] Map files: {', '.join(map_filenames)}")
         result = generate_agents_map(
             analysis.manifest,
             analysis.graph,
@@ -1262,6 +1280,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
             max_depth=args.max_depth,
             dry_run=args.dry_run,
             summaries=summaries,
+            map_filenames=map_filenames,
         )
         action = "would update" if args.dry_run else "updated"
         print(
@@ -1281,14 +1300,14 @@ def cmd_agents(args: argparse.Namespace) -> int:
                 {
                     entry.path: entry.content_hash
                     for entry in analysis.inventory.files
-                    if not entry.path.endswith("AGENTS.md")
+                    if not is_map_path(entry.path)
                 },
                 analysis.manifest.meta.generated_at,
                 orchestrator.config.output_dir,
             )
         return 1 if result.errors else 0
     except Exception as exc:
-        print(f"[error] AGENTS.md generation failed: {exc}")
+        print(f"[error] Instruction map generation failed: {exc}")
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -1488,12 +1507,13 @@ def cmd_clean(args: argparse.Namespace) -> int:
     
     # Remove only our managed block from AGENTS.md files (unless cache-only)
     if not args.cache_only:
-        for agents_md in root.rglob('AGENTS.md'):
-            if remove_managed_map(agents_md):
-                removed.append(str(agents_md.relative_to(root)))
-            elif is_generated_agents_md(agents_md):
-                agents_md.unlink()
-                removed.append(str(agents_md.relative_to(root)))
+        for map_filename in MAP_FILENAMES:
+            for agents_md in root.rglob(map_filename):
+                if remove_managed_map(agents_md):
+                    removed.append(str(agents_md.relative_to(root)))
+                elif is_generated_agents_md(agents_md):
+                    agents_md.unlink()
+                    removed.append(str(agents_md.relative_to(root)))
     
     if removed:
         print(f"[clean] Removed {len(removed)} items:")

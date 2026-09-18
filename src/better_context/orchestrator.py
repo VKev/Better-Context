@@ -20,10 +20,11 @@ import hashlib
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
-from .agents_map import generate_agents_map, load_summaries
+from .agents_map import generate_agents_map, is_map_path, load_summaries
 from .architecture import analyze_architecture
 from .centrality import calculate_pagerank, get_top_files
 from .centrality import find_cycles as centrality_find_cycles
@@ -249,7 +250,7 @@ class Orchestrator:
             file_hashes = {
                 f.path: f.content_hash
                 for f in analysis.inventory.files
-                if not f.path.endswith("AGENTS.md")
+                if not is_map_path(f.path)
             }
             save_staleness_info(
                 self.root,
@@ -322,6 +323,7 @@ class Orchestrator:
         graph: DependencyGraph,
         max_depth: int = -1,
         output_root: Optional[Path] = None,
+        map_filenames: Optional[Sequence[str]] = None,
     ) -> Any:
         """Generate safe, marker-managed AGENTS.md maps from a manifest.
         
@@ -329,6 +331,7 @@ class Orchestrator:
             manifest: Analysis manifest
             graph: Dependency graph
             max_depth: Maximum depth for generation (-1 = unlimited)
+            map_filenames: Instruction files to write (default: config.map_files)
             output_root: Where to write files (default: project root)
         
         Returns:
@@ -340,6 +343,7 @@ class Orchestrator:
             output_root or self.root,
             max_depth=max_depth,
             summaries=load_summaries(self.root),
+            map_filenames=map_filenames or self.config.map_files,
         )
     
     def save_manifest(self, manifest: Manifest, path: Optional[Path] = None) -> Path:
@@ -514,7 +518,7 @@ class Orchestrator:
             files_imports[path] = raw_imports
         
         # Get all file paths
-        all_paths = [f.path for f in inventory.files if not f.path.endswith("AGENTS.md")]
+        all_paths = [f.path for f in inventory.files if not is_map_path(f.path)]
         
         # Build graph
         graph, resolution = build_dependency_graph(
@@ -732,7 +736,7 @@ class Orchestrator:
             if classification:
                 entry.metadata["architecture"] = asdict(classification)
 
-        analyzed_files = [entry for entry in files if not entry.path.endswith("AGENTS.md")]
+        analyzed_files = [entry for entry in files if not is_map_path(entry.path)]
         analyzed_source_files = [entry for entry in analyzed_files if entry.language]
         project = collect_project_facts(self.root, [entry.path for entry in analyzed_files])
         project["analysis_engine"] = self._analysis_engine

@@ -6,7 +6,7 @@ import json
 import posixpath
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -19,6 +19,51 @@ from .unity_intelligence import classify_ownership
 BEGIN = "<!-- better-context-unity:begin -->"
 END = "<!-- better-context-unity:end -->"
 MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTALL)
+
+# Instruction files that may carry a managed map block: ``AGENTS.md`` is read by
+# Codex-style agents, ``CLAUDE.md`` by Claude Code. Both names are always
+# *recognized* (never analysed as project source, always cleanable); which ones
+# are *written* comes from ``map_files`` in ``.ctx.json`` or ``--map-file``.
+MAP_FILENAMES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
+DEFAULT_MAP_FILENAMES: tuple[str, ...] = ("AGENTS.md",)
+_MAP_FILENAMES_CF = {name.casefold() for name in MAP_FILENAMES}
+_MAP_META_FILENAMES_CF = {f"{name}.meta".casefold() for name in MAP_FILENAMES}
+
+
+def is_map_filename(name: str) -> bool:
+    """Return True when ``name`` is a managed instruction-map file name."""
+    return name.casefold() in _MAP_FILENAMES_CF
+
+
+def is_map_path(path: str) -> bool:
+    """Return True when ``path`` points at a managed instruction-map file."""
+    return is_map_filename(PurePosixPath(path).name)
+
+
+def is_map_meta_filename(name: str) -> bool:
+    """Return True when ``name`` is a Unity ``.meta`` sidecar of a map file."""
+    return name.casefold() in _MAP_META_FILENAMES_CF
+
+
+def resolve_map_filenames(values: Sequence[str] | None) -> tuple[str, ...]:
+    """Validate and normalize requested map file names, preserving order.
+
+    An empty or missing selection falls back to ``DEFAULT_MAP_FILENAMES`` so
+    existing callers and configurations keep writing ``AGENTS.md`` only.
+    """
+    if not values:
+        return DEFAULT_MAP_FILENAMES
+    canonical = {name.casefold(): name for name in MAP_FILENAMES}
+    selected: list[str] = []
+    for value in values:
+        key = str(value).strip().casefold()
+        if key not in canonical:
+            supported = ", ".join(MAP_FILENAMES)
+            raise ValueError(f"Unsupported map file '{value}'; supported: {supported}")
+        name = canonical[key]
+        if name not in selected:
+            selected.append(name)
+    return tuple(selected)
 UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
 UNITY_RUNTIME_SUFFIXES = {
     ".aif",
@@ -120,39 +165,50 @@ def generate_agents_map(
     max_depth: int = -1,
     dry_run: bool = False,
     summaries: Mapping[str, str] | None = None,
+    map_filenames: Sequence[str] | None = None,
 ) -> MapResult:
-    """Create or refresh only the marked map block in each AGENTS.md."""
+    """Create or refresh only the marked map block in each instruction map.
+
+    ``map_filenames`` selects which instruction files receive the managed block
+    (``AGENTS.md`` for Codex-style agents, ``CLAUDE.md`` for Claude Code). Every
+    selected file receives the same scan result, so client maps cannot drift.
+    """
     output_root = output_root.resolve()
+    filenames = resolve_map_filenames(map_filenames)
     unity = _is_unity_project(output_root)
     directories = _collect_directories(manifest, unity, max_depth)
     summaries = summaries or {}
     result = MapResult()
 
     for rel_dir in sorted(directories, key=lambda value: (value.count("/"), value)):
-        target = output_root / Path(rel_dir) / "AGENTS.md" if rel_dir else output_root / "AGENTS.md"
-        managed = _render_directory(
-            rel_dir,
-            directories,
-            manifest,
-            graph,
-            unity,
-            summaries,
-        )
-        try:
-            current = target.read_text(encoding="utf-8") if target.exists() else ""
-            updated = _merge_managed_block(current, managed)
-            relative_target = target.relative_to(output_root).as_posix()
-            if updated == current:
-                result.unchanged.append(relative_target)
-            else:
-                result.files_written.append(relative_target)
-                if not dry_run:
-                    target.write_text(updated, encoding="utf-8")
-        except OSError as exc:
-            result.errors.append(f"{target}: {exc}")
+        for filename in filenames:
+            target = (
+                output_root / Path(rel_dir) / filename if rel_dir else output_root / filename
+            )
+            managed = _render_directory(
+                rel_dir,
+                directories,
+                manifest,
+                graph,
+                unity,
+                summaries,
+                map_filename=filename,
+            )
+            try:
+                current = target.read_text(encoding="utf-8") if target.exists() else ""
+                updated = _merge_managed_block(current, managed)
+                relative_target = target.relative_to(output_root).as_posix()
+                if updated == current:
+                    result.unchanged.append(relative_target)
+                else:
+                    result.files_written.append(relative_target)
+                    if not dry_run:
+                        target.write_text(updated, encoding="utf-8")
+            except OSError as exc:
+                result.errors.append(f"{target}: {exc}")
 
     if unity:
-        _remove_stale_managed_maps(output_root, directories, dry_run, result)
+        _remove_stale_managed_maps(output_root, directories, dry_run, result, filenames)
 
     return result
 
@@ -168,7 +224,7 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
     known_paths = {entry.path for entry in manifest.files}
     for entry in manifest.files:
         path = PurePosixPath(entry.path)
-        if path.name == "AGENTS.md" or not path.parts:
+        if is_map_filename(path.name) or not path.parts:
             continue
         if unity and path.parts[0] not in UNITY_ROOTS:
             continue
@@ -997,12 +1053,16 @@ def _remove_stale_managed_maps(
     directories: set[str],
     dry_run: bool,
     result: MapResult,
+    map_filenames: Sequence[str] = DEFAULT_MAP_FILENAMES,
 ) -> None:
     for root_name in sorted(UNITY_ROOTS):
         root = output_root / root_name
         if not root.is_dir():
             continue
-        for target in root.rglob("AGENTS.md"):
+        stale_candidates = [
+            target for filename in map_filenames for target in sorted(root.rglob(filename))
+        ]
+        for target in stale_candidates:
             rel_dir = target.parent.relative_to(output_root).as_posix()
             if rel_dir in directories:
                 continue
@@ -1025,11 +1085,12 @@ def _render_directory(
     graph: DependencyGraph,
     unity: bool,
     summaries: Mapping[str, str],
+    map_filename: str = "AGENTS.md",
 ) -> str:
     direct_files = [
         entry
         for entry in manifest.files
-        if _parent(entry.path) == rel_dir and PurePosixPath(entry.path).name != "AGENTS.md"
+        if _parent(entry.path) == rel_dir and not is_map_filename(PurePosixPath(entry.path).name)
     ]
     runtime_files = _unity_runtime_entries_for_map(rel_dir, directories, manifest)
     asset_path_records = _unity_asset_path_records(rel_dir, directories, manifest)
@@ -1042,7 +1103,7 @@ def _render_directory(
     ]
     metadata_count = sum(
         entry.path.endswith(".meta")
-        and PurePosixPath(entry.path).name.casefold() != "agents.md.meta"
+        and not is_map_meta_filename(PurePosixPath(entry.path).name)
         for entry in direct_files
     )
     children = sorted(value for value in directories if value and _parent(value) == rel_dir)
@@ -1065,7 +1126,7 @@ def _render_directory(
         lines.extend(["### Child folders", "", header, divider])
         for child in children:
             name = PurePosixPath(child).name
-            destination = quote(name, safe="") + "/AGENTS.md"
+            destination = quote(name, safe="") + "/" + map_filename
             row = f"| [`{name}/`]({destination}) | {_directory_purpose(child, manifest, unity)}"
             if has_summaries:
                 row += f" | {_summary_cell(summaries.get(child, '—'))}"
@@ -1135,7 +1196,8 @@ def _render_directory(
     lines.extend(_local_violations(rel_dir, manifest))
 
     if rel_dir:
-        lines.extend(["Parent map: [`../AGENTS.md`](../AGENTS.md)", ""])
+        parent_link = f"../{map_filename}"
+        lines.extend([f"Parent map: [`{parent_link}`]({parent_link})", ""])
     else:
         lines.extend(
             [
@@ -1195,7 +1257,7 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
     source_files = [
         entry
         for entry in manifest.files
-        if entry.path.startswith(prefix) and entry.language and not entry.path.endswith("AGENTS.md")
+        if entry.path.startswith(prefix) and entry.language and not is_map_path(entry.path)
     ]
     declarations = [
         chunk.name
@@ -1220,7 +1282,7 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
     files = [
         entry
         for entry in manifest.files
-        if entry.path.startswith(prefix) and not entry.path.endswith("AGENTS.md")
+        if entry.path.startswith(prefix) and not is_map_path(entry.path)
     ]
     runtime_assets = [
         (entry, _unity_runtime(entry))
@@ -1370,7 +1432,7 @@ def _module_intelligence(rel_dir: str, manifest: Manifest) -> list[str]:
     source_files = [
         entry
         for entry in manifest.files
-        if entry.path.startswith(prefix) and entry.language and not entry.path.endswith("AGENTS.md")
+        if entry.path.startswith(prefix) and entry.language and not is_map_path(entry.path)
     ]
     if not source_files:
         return []
@@ -1877,7 +1939,8 @@ def summary_targets(manifest: Manifest, root: Path, max_depth: int = -1) -> set[
     files = {
         entry.path
         for entry in manifest.files
-        if _parent(entry.path) in directories and PurePosixPath(entry.path).name != "AGENTS.md"
+        if _parent(entry.path) in directories
+        and not is_map_filename(PurePosixPath(entry.path).name)
     }
     return directories | files
 
@@ -1914,15 +1977,21 @@ def remove_managed_map(path: Path) -> bool:
 
 __all__ = [
     "BEGIN",
+    "DEFAULT_MAP_FILENAMES",
     "END",
+    "MAP_FILENAMES",
     "MAX_SUMMARY_LENGTH",
     "MapResult",
     "SUMMARY_FILE",
     "generate_agents_map",
+    "is_map_filename",
+    "is_map_meta_filename",
+    "is_map_path",
     "load_summaries",
     "normalize_summary_path",
     "parse_summary_assignment",
     "remove_managed_map",
+    "resolve_map_filenames",
     "save_summaries",
     "summary_targets",
 ]

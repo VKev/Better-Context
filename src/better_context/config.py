@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .agents_map import DEFAULT_MAP_FILENAMES, MAP_FILENAMES
+
 
 @dataclass
 class Config:
@@ -28,6 +30,10 @@ class Config:
     output_dir: str = ".better-context"
     manifest_file: str = "manifest.json"
     generate_agents_md: bool = True
+    # Instruction files that receive the managed map block. "AGENTS.md" serves
+    # Codex-style agents, "CLAUDE.md" serves Claude Code; list both to keep the
+    # two clients on one scan.
+    map_files: list[str] = field(default_factory=lambda: list(DEFAULT_MAP_FILENAMES))
 
     # Analysis
     pagerank_damping: float = 0.85
@@ -162,5 +168,20 @@ def validate_config(config: Config) -> list[str]:
 
     if config.unity_editor_path is not None and not isinstance(config.unity_editor_path, str):
         errors.append("unity_editor_path must be a string or null")
+
+    if not isinstance(config.map_files, list) or not config.map_files:
+        errors.append(f"map_files must be a non-empty list of {', '.join(MAP_FILENAMES)}")
+    else:
+        supported = {name.casefold() for name in MAP_FILENAMES}
+        unknown = [
+            value
+            for value in config.map_files
+            if not isinstance(value, str) or value.strip().casefold() not in supported
+        ]
+        if unknown:
+            errors.append(
+                f"map_files entries must be one of {', '.join(MAP_FILENAMES)}; "
+                f"got {unknown[0]!r}"
+            )
 
     return errors

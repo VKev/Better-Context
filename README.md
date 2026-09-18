@@ -105,6 +105,29 @@ UnityProject/
     └── AGENTS.md
 ```
 
+## Multi-client maps (AGENTS.md and CLAUDE.md)
+
+One scan can own the map block in more than one instruction file, so a Codex
+agent and Claude Code read the same verified project map instead of two
+independently generated ones:
+
+```bash
+better-context-unity agents --map-file AGENTS.md --map-file CLAUDE.md
+```
+
+Set it once per project instead of passing the flag everywhere:
+
+```json
+{ "map_files": ["AGENTS.md", "CLAUDE.md"] }
+```
+
+Supported names are `AGENTS.md` and `CLAUDE.md`; the default stays `AGENTS.md`
+alone. Both names are always *recognized*: neither file is analysed as project
+source, both are excluded from staleness hashes, and `clean` removes the managed
+block from both whatever `map_files` currently selects. Child and parent links
+inside a map always point at the same file name, so `CLAUDE.md` navigates to
+`CLAUDE.md`.
+
 ## Safe AGENTS.md ownership
 
 Generated content is enclosed by explicit markers:
