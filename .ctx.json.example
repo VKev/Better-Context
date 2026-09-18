@@ -7,6 +7,8 @@
   "output_dir": ".better-context",
   "manifest_file": "manifest.json",
   "generate_agents_md": true,
+  "project_kind": "auto",
+  "asset_scope": "project-owned",
   "map_files": ["AGENTS.md", "CLAUDE.md"],
   "pagerank_damping": 0.85,
   "pagerank_iterations": 20,

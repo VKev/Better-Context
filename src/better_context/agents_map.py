@@ -14,6 +14,13 @@ from urllib.parse import quote
 
 from .graph import DependencyGraph
 from .manifest import FileEntry, Manifest
+from .project_kind import COCOS_KIND, UNITY_KIND, detect_project_kind
+from .project_profile import (
+    COCOS_PROFILE,
+    UNITY_PROFILE,
+    ProjectKindProfile,
+    profile_for_kind,
+)
 from .unity_intelligence import classify_ownership
 
 BEGIN = "<!-- better-context-unity:begin -->"
@@ -64,71 +71,12 @@ def resolve_map_filenames(values: Sequence[str] | None) -> tuple[str, ...]:
         if name not in selected:
             selected.append(name)
     return tuple(selected)
-UNITY_ROOTS = {"Assets", "Packages", "ProjectSettings"}
-UNITY_RUNTIME_SUFFIXES = {
-    ".aif",
-    ".aiff",
-    ".anim",
-    ".asset",
-    ".avi",
-    ".bmp",
-    ".controller",
-    ".cubemap",
-    ".exr",
-    ".fbx",
-    ".flac",
-    ".gif",
-    ".hdr",
-    ".jpeg",
-    ".jpg",
-    ".lighting",
-    ".mat",
-    ".mixer",
-    ".mov",
-    ".mp3",
-    ".mp4",
-    ".ogg",
-    ".otf",
-    ".overridecontroller",
-    ".physicsmaterial2d",
-    ".physicmaterial",
-    ".playable",
-    ".png",
-    ".prefab",
-    ".psd",
-    ".rendertexture",
-    ".shader",
-    ".shadergraph",
-    ".shadersubgraph",
-    ".spriteatlas",
-    ".svg",
-    ".terrainlayer",
-    ".tga",
-    ".tif",
-    ".tiff",
-    ".ttf",
-    ".unity",
-    ".wav",
-    ".webm",
-}
-UNITY_ASSET_PATH_SUFFIXES = UNITY_RUNTIME_SUFFIXES | {
-    ".3ds",
-    ".blend",
-    ".dae",
-    ".exr",
-    ".fbx",
-    ".hdr",
-    ".jpeg",
-    ".jpg",
-    ".mp3",
-    ".mp4",
-    ".obj",
-    ".ogg",
-    ".png",
-    ".psd",
-    ".tga",
-    ".wav",
-}
+# Kept as module-level views on the Unity profile so existing callers and
+# generated references keep working; the renderer itself reads the active profile.
+UNITY_ROOTS = set(UNITY_PROFILE.roots)
+UNITY_RUNTIME_SUFFIXES = set(UNITY_PROFILE.runtime_suffixes)
+UNITY_ASSET_PATH_SUFFIXES = set(UNITY_PROFILE.asset_path_suffixes)
+UNITY_LIFECYCLE_METHODS = set(UNITY_PROFILE.lifecycle_methods)
 SUMMARY_FILE = ".ctx-summaries.json"
 MAX_SUMMARY_LENGTH = 240
 DEFAULT_UNITY_ASSET_LIMIT = 12
@@ -136,18 +84,6 @@ DEFAULT_UNITY_OBJECT_LIMIT = 8
 DEFAULT_UNITY_PATH_LIMIT = 24
 ROOT_UNITY_ASSET_LIMIT = 8
 UNITY_ART_MAP_MAX_DEPTH = 3
-UNITY_LIFECYCLE_METHODS = {
-    "Awake",
-    "OnEnable",
-    "Start",
-    "FixedUpdate",
-    "Update",
-    "LateUpdate",
-    "OnDisable",
-    "OnDestroy",
-    "OnValidate",
-    "Reset",
-}
 
 
 @dataclass
@@ -175,8 +111,8 @@ def generate_agents_map(
     """
     output_root = output_root.resolve()
     filenames = resolve_map_filenames(map_filenames)
-    unity = _is_unity_project(output_root)
-    directories = _collect_directories(manifest, unity, max_depth)
+    profile = resolve_profile(output_root, manifest)
+    directories = _collect_directories(manifest, profile, max_depth)
     summaries = summaries or {}
     result = MapResult()
 
@@ -190,7 +126,7 @@ def generate_agents_map(
                 directories,
                 manifest,
                 graph,
-                unity,
+                profile,
                 summaries,
                 map_filename=filename,
             )
@@ -207,31 +143,56 @@ def generate_agents_map(
             except OSError as exc:
                 result.errors.append(f"{target}: {exc}")
 
-    if unity:
-        _remove_stale_managed_maps(output_root, directories, dry_run, result, filenames)
+    if profile.roots:
+        _remove_stale_managed_maps(
+            output_root, directories, dry_run, result, filenames, profile
+        )
 
     return result
 
 
+def resolve_profile(root: Path, manifest: Manifest | None = None) -> ProjectKindProfile:
+    """Pick the engine profile for a project root.
+
+    A manifest produced by a previous scan already records the kind, so trust it
+    when present; otherwise detect from the filesystem.
+    """
+    kind = ""
+    if manifest is not None:
+        kind = str(manifest.project.get("kind", "") or "")
+        if kind not in {UNITY_KIND, COCOS_KIND}:
+            # A scan that produced engine runtime facts is authoritative even when the
+            # manifest predates the `kind` field or the root markers are unavailable.
+            runtime = manifest.project.get("engine_runtime")
+            if isinstance(runtime, Mapping) and runtime.get("kind") in {UNITY_KIND, COCOS_KIND}:
+                kind = str(runtime["kind"])
+            elif isinstance(manifest.project.get("unity_runtime"), Mapping):
+                kind = UNITY_KIND
+    if kind not in {UNITY_KIND, COCOS_KIND}:
+        kind = detect_project_kind(root)
+    return profile_for_kind(kind)
+
+
 def _is_unity_project(root: Path) -> bool:
-    return (root / "Assets").is_dir() and (
-        root / "ProjectSettings" / "ProjectVersion.txt"
-    ).is_file()
+    return detect_project_kind(root) == UNITY_KIND
 
 
-def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set[str]:
+def _collect_directories(
+    manifest: Manifest, profile: ProjectKindProfile, max_depth: int
+) -> set[str]:
     directories = {""}
     known_paths = {entry.path for entry in manifest.files}
     for entry in manifest.files:
         path = PurePosixPath(entry.path)
         if is_map_filename(path.name) or not path.parts:
             continue
-        if unity and path.parts[0] not in UNITY_ROOTS:
+        if profile.roots and path.parts[0] not in profile.roots:
             continue
-        source_signal = unity and _is_map_signal_file(path)
-        runtime_signal = unity and _has_unity_runtime_signal(entry, manifest)
+        engine = profile.is_engine
+        source_signal = engine and _is_map_signal_file(path, profile)
+        runtime_signal = engine and _has_unity_runtime_signal(entry, manifest, profile)
         semantic_signal = source_signal or runtime_signal
-        asset_path = _logical_unity_asset_path(entry.path) if unity else ""
+        asset_path = _logical_unity_asset_path(entry.path, profile) if engine else ""
         if (
             asset_path
             and entry.path.endswith(".meta")
@@ -239,9 +200,9 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
             and not (Path(manifest.meta.root_path) / Path(asset_path)).is_file()
         ):
             asset_path = ""
-        if unity and not semantic_signal and not asset_path:
+        if engine and not semantic_signal and not asset_path:
             continue
-        boundary = _map_boundary(path.parent) if unity else None
+        boundary = _map_boundary(path.parent) if engine else None
         parent = PurePosixPath(asset_path).parent if asset_path else path.parent
         depth_limit = max_depth
         runtime_kind = str(_unity_runtime(entry).get("kind", ""))
@@ -267,7 +228,7 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
             if not is_below_boundary and (depth_limit < 0 or len(parent.parts) <= depth_limit):
                 directories.add(parent.as_posix())
             parent = parent.parent
-    if unity:
+    if profile.kind == UNITY_KIND:
         for scene in manifest.project.get("scenes", []):
             if (
                 scene.get("ownership") != "project-owned"
@@ -283,34 +244,35 @@ def _collect_directories(manifest: Manifest, unity: bool, max_depth: int) -> set
     return directories
 
 
-def _is_map_signal_file(path: PurePosixPath) -> bool:
-    if path.parts[0] in {"Packages", "ProjectSettings"}:
+def _is_map_signal_file(path: PurePosixPath, profile: ProjectKindProfile) -> bool:
+    if path.parts[0] in profile.config_roots:
         return path.suffix.lower() != ".meta"
-    return path.suffix.lower() in {
-        ".cs",
-        ".asmdef",
-        ".asmref",
-        ".json",
-        ".uxml",
-        ".uss",
-    }
+    return profile.map_signal_suffix(path.suffix)
 
 
-def _logical_unity_asset_path(path: str) -> str:
+def _logical_unity_asset_path(path: str, profile: ProjectKindProfile = UNITY_PROFILE) -> str:
     candidate = path[:-5] if path.lower().endswith(".meta") else path
-    if PurePosixPath(candidate).suffix.lower() in UNITY_ASSET_PATH_SUFFIXES:
+    if profile.asset_path_suffix(PurePosixPath(candidate).suffix):
         return candidate
     return ""
 
 
 def _unity_runtime(entry: FileEntry) -> Mapping[str, Any]:
-    value = entry.metadata.get("unity_runtime")
-    return value if isinstance(value, Mapping) else {}
+    """Per-file engine runtime detail, whichever engine produced it."""
+    for slot in ("unity_runtime", "engine_runtime"):
+        value = entry.metadata.get(slot)
+        if isinstance(value, Mapping):
+            return value
+    return {}
 
 
 def _unity_runtime_project(manifest: Manifest) -> Mapping[str, Any]:
-    value = manifest.project.get("unity_runtime")
-    return value if isinstance(value, Mapping) else {}
+    """Project-level engine runtime summary, whichever engine produced it."""
+    for slot in ("unity_runtime", "engine_runtime"):
+        value = manifest.project.get(slot)
+        if isinstance(value, Mapping):
+            return value
+    return {}
 
 
 def _runtime_asset_entries(manifest: Manifest) -> list[tuple[FileEntry, Mapping[str, Any]]]:
@@ -417,8 +379,9 @@ def _detail_has_unity_runtime_signal(
     entry: FileEntry,
     detail: Mapping[str, Any],
     manifest: Manifest,
+    profile: ProjectKindProfile = UNITY_PROFILE,
 ) -> bool:
-    if PurePosixPath(entry.path).suffix.lower() not in UNITY_RUNTIME_SUFFIXES:
+    if not profile.runtime_suffix(PurePosixPath(entry.path).suffix):
         return False
     if not detail or not _runtime_scope_allows(entry, detail, manifest):
         return False
@@ -456,8 +419,10 @@ def _detail_has_unity_runtime_signal(
         return False
 
 
-def _has_unity_runtime_signal(entry: FileEntry, manifest: Manifest) -> bool:
-    return _detail_has_unity_runtime_signal(entry, _unity_runtime(entry), manifest)
+def _has_unity_runtime_signal(
+    entry: FileEntry, manifest: Manifest, profile: ProjectKindProfile = UNITY_PROFILE
+) -> bool:
+    return _detail_has_unity_runtime_signal(entry, _unity_runtime(entry), manifest, profile)
 
 
 def _unity_output_limits(manifest: Manifest) -> tuple[int, int]:
@@ -778,6 +743,7 @@ def _unity_runtime_assets_section(
     entries: list[FileEntry],
     manifest: Manifest,
     rel_dir: str,
+    profile: ProjectKindProfile = UNITY_PROFILE,
 ) -> list[str]:
     asset_limit, object_limit = _unity_output_limits(manifest)
     ranked = sorted(
@@ -788,7 +754,7 @@ def _unity_runtime_assets_section(
         ),
     )
     lines = [
-        "### Unity runtime assets",
+        f"### {profile.label} runtime assets",
         "",
         "| Asset | Kind | Verified responsibility | Runtime topology and bindings |",
         "|---|---|---|---|",
@@ -805,14 +771,16 @@ def _unity_runtime_assets_section(
     if len(ranked) > asset_limit:
         lines.append(
             f"| … | — | {len(ranked) - asset_limit} lower-signal runtime assets omitted "
-            "from this token-optimized map. | Use `better-context-unity unity list` "
-            "or `unity show <project-relative-asset>` for full detail. |"
+            "from this token-optimized map. | Use "
+            f"`better-context-unity {profile.asset_command} list` or "
+            f"`{profile.asset_command} show <project-relative-asset>` for full detail. |"
         )
     lines.extend(
         [
             "",
             "Full hierarchy and serialized evidence: "
-            "`better-context-unity unity show <project-relative-asset> --depth -1`.",
+            f"`better-context-unity {profile.asset_command} show "
+            "<project-relative-asset> --depth -1`.",
             "",
         ]
     )
@@ -833,11 +801,12 @@ def _unity_runtime_entries_for_map(
     rel_dir: str,
     directories: set[str],
     manifest: Manifest,
+    profile: ProjectKindProfile = UNITY_PROFILE,
 ) -> list[FileEntry]:
     return [
         entry
         for entry in manifest.files
-        if _has_unity_runtime_signal(entry, manifest)
+        if _has_unity_runtime_signal(entry, manifest, profile)
         and _asset_path_owner(entry.path, directories) == rel_dir
     ]
 
@@ -846,11 +815,12 @@ def _unity_asset_path_records(
     rel_dir: str,
     directories: set[str],
     manifest: Manifest,
+    profile: ProjectKindProfile = UNITY_PROFILE,
 ) -> list[tuple[str, str, str]]:
     entries_by_path = {entry.path: entry for entry in manifest.files}
     logical_paths: dict[str, FileEntry] = {}
     for entry in manifest.files:
-        logical = _logical_unity_asset_path(entry.path)
+        logical = _logical_unity_asset_path(entry.path, profile)
         if not logical:
             continue
         if (
@@ -891,19 +861,21 @@ def _unity_asset_path_records(
     }
     for logical, fallback_entry in sorted(logical_paths.items()):
         asset_entry = entries_by_path.get(logical, fallback_entry)
-        if _has_unity_runtime_signal(asset_entry, manifest):
+        if _has_unity_runtime_signal(asset_entry, manifest, profile):
             continue
         if _asset_path_owner(logical, directories) != rel_dir:
             continue
         relative = posixpath.relpath(logical, rel_dir or ".")
         suffix = PurePosixPath(logical).suffix.lower()
-        records.append((logical, relative, kind_labels.get(suffix, "Unity asset")))
+        records.append((logical, relative, kind_labels.get(suffix, f"{profile.label} asset")))
     return records
 
 
-def _unity_asset_paths_section(records: list[tuple[str, str, str]]) -> list[str]:
+def _unity_asset_paths_section(
+    records: list[tuple[str, str, str]], profile: ProjectKindProfile = UNITY_PROFILE
+) -> list[str]:
     lines = [
-        "### Unity asset paths",
+        f"### {profile.label} asset paths",
         "",
         "Path-only navigation for art/media or low-signal serialized assets; no "
         "code-like responsibility is inferred.",
@@ -923,7 +895,91 @@ def _unity_asset_paths_section(records: list[tuple[str, str, str]]) -> list[str]
     return lines
 
 
-def _root_unity_runtime(manifest: Manifest) -> list[str]:
+def _cocos_project_overview(project: Mapping[str, Any]) -> list[str]:
+    """Verified Cocos facts: engine version, bundle contract, start scene."""
+    lines = [
+        f"- Cocos Creator `{project.get('creator_version', 'unknown')}`; analyzer: "
+        f"`{project.get('analysis_engine', 'unknown')}`."
+    ]
+    bundles = project.get("bundles") or []
+    if isinstance(bundles, list) and bundles:
+        rendered = ", ".join(
+            f"`{bundle.get('bundle_name')}` ({bundle.get('folder')})"
+            for bundle in bundles
+            if isinstance(bundle, Mapping)
+        )
+        lines.append(
+            "- Asset bundles (the folder-to-bundle contract `loadBundle` depends on): "
+            + rendered
+            + "."
+        )
+    start_scene = project.get("start_scene")
+    if start_scene:
+        lines.append(f"- Start scene uuid: `{start_scene}`.")
+    extensions = project.get("extensions") or []
+    if isinstance(extensions, list) and extensions:
+        lines.append(
+            "- Editor extensions: " + ", ".join(f"`{item}`" for item in extensions) + "."
+        )
+    return lines
+
+
+def _root_cocos_runtime(
+    manifest: Manifest, profile: ProjectKindProfile = COCOS_PROFILE
+) -> list[str]:
+    """Root-level Cocos serialized-asset intelligence."""
+    runtime = _unity_runtime_project(manifest)
+    if not runtime or str(runtime.get("kind", "")) != COCOS_KIND:
+        return []
+    metrics = runtime.get("metrics") if isinstance(runtime.get("metrics"), Mapping) else {}
+    coverage = runtime.get("coverage") if isinstance(runtime.get("coverage"), Mapping) else {}
+    index = runtime.get("index") if isinstance(runtime.get("index"), Mapping) else {}
+    lines = ["", f"### {profile.label} runtime intelligence", ""]
+    lines.append(
+        "- "
+        + ", ".join(
+            [
+                f"{metrics.get('scenes', 0)} scenes",
+                f"{metrics.get('prefabs', 0)} prefabs",
+                f"{metrics.get('animation_clips', 0)} animation clips",
+                f"{metrics.get('resolved_scripts', 0)} resolved component scripts",
+                f"{metrics.get('unresolved_components', 0)} unresolved component types",
+            ]
+        )
+        + "."
+    )
+    lines.append(
+        f"- Parse coverage: {coverage.get('parsed', 0)}/{coverage.get('candidates', 0)} "
+        "candidate serialized assets parsed."
+    )
+    lines.append(
+        f"- Identity index: {index.get('assets_with_uuid', 0)} asset uuid(s), "
+        f"{index.get('script_class_ids', 0)} script class-id(s), "
+        f"{index.get('ccclass_names', 0)} `@ccclass` name(s)."
+    )
+    if metrics.get("unresolved_components"):
+        lines.append(
+            "- An unresolved component type means a missing script, a stale class-id, or a "
+            "duplicate `@ccclass`; it renders as `MissingScript` at runtime."
+        )
+    lines.extend(
+        [
+            "",
+            f"- Browse assets: `better-context-unity {profile.asset_command} list "
+            "[--kind KIND] [--limit 50] [--format json|human|markdown]`.",
+            f"- Inspect one hierarchy: `better-context-unity {profile.asset_command} show "
+            "<project-relative-asset> [--depth 2|-1] [--format ...]`.",
+            f"- Inspect resolved components: `better-context-unity {profile.asset_command} "
+            "components [--asset PATH] [--type TYPE] [--object PATH] [--format ...]`.",
+            "",
+        ]
+    )
+    return lines
+
+
+def _root_unity_runtime(
+    manifest: Manifest, profile: ProjectKindProfile = UNITY_PROFILE
+) -> list[str]:
     runtime = _unity_runtime_project(manifest)
     if not runtime:
         return []
@@ -1000,7 +1056,7 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
         lines.extend(
             [
                 "",
-                "#### Key Unity runtime assets",
+                f"#### Key {profile.label} runtime assets",
                 "",
                 "| Asset | Kind | Verified responsibility | Runtime signal |",
                 "|---|---|---|---|",
@@ -1018,20 +1074,20 @@ def _root_unity_runtime(manifest: Manifest) -> list[str]:
             lines.append(
                 f"| … | — | {len(ranked) - ROOT_UNITY_ASSET_LIMIT} additional semantic "
                 "runtime assets are available on demand. | "
-                "`better-context-unity unity list --limit 50` |"
+                f"`better-context-unity {profile.asset_command} list --limit 50` |"
             )
 
     lines.extend(
         [
             "",
-            "- Browse assets: `better-context-unity unity list "
+            f"- Browse assets: `better-context-unity {profile.asset_command} list "
             "[--kind KIND] [--limit 50] [--format json|human|markdown]`.",
-            "- Inspect one hierarchy: `better-context-unity unity show "
+            f"- Inspect one hierarchy: `better-context-unity {profile.asset_command} show "
             "<project-relative-asset> [--depth 2|-1] [--format ...]`.",
-            "- Find persistent calls: `better-context-unity unity bindings "
+            f"- Find persistent calls: `better-context-unity {profile.asset_command} bindings "
             "[--asset PATH] [--type TYPE] [--method METHOD] [--format ...]`.",
-            "- Inspect resolved components: `better-context-unity unity components "
-            "[--asset PATH] [--type TYPE] [--object PATH] [--format ...]`.",
+            f"- Inspect resolved components: `better-context-unity {profile.asset_command} "
+            "components [--asset PATH] [--type TYPE] [--object PATH] [--format ...]`.",
             "",
         ]
     )
@@ -1054,8 +1110,9 @@ def _remove_stale_managed_maps(
     dry_run: bool,
     result: MapResult,
     map_filenames: Sequence[str] = DEFAULT_MAP_FILENAMES,
+    profile: ProjectKindProfile = UNITY_PROFILE,
 ) -> None:
-    for root_name in sorted(UNITY_ROOTS):
+    for root_name in sorted(profile.roots):
         root = output_root / root_name
         if not root.is_dir():
             continue
@@ -1083,7 +1140,7 @@ def _render_directory(
     directories: set[str],
     manifest: Manifest,
     graph: DependencyGraph,
-    unity: bool,
+    profile: ProjectKindProfile,
     summaries: Mapping[str, str],
     map_filename: str = "AGENTS.md",
 ) -> str:
@@ -1092,14 +1149,14 @@ def _render_directory(
         for entry in manifest.files
         if _parent(entry.path) == rel_dir and not is_map_filename(PurePosixPath(entry.path).name)
     ]
-    runtime_files = _unity_runtime_entries_for_map(rel_dir, directories, manifest)
-    asset_path_records = _unity_asset_path_records(rel_dir, directories, manifest)
+    runtime_files = _unity_runtime_entries_for_map(rel_dir, directories, manifest, profile)
+    asset_path_records = _unity_asset_path_records(rel_dir, directories, manifest, profile)
     visible_files = [
         entry
         for entry in direct_files
         if not entry.path.endswith(".meta")
         and not _unity_runtime(entry)
-        and not _logical_unity_asset_path(entry.path)
+        and not _logical_unity_asset_path(entry.path, profile)
     ]
     metadata_count = sum(
         entry.path.endswith(".meta")
@@ -1108,14 +1165,16 @@ def _render_directory(
     )
     children = sorted(value for value in directories if value and _parent(value) == rel_dir)
     title = (
-        "Unity project map" if not rel_dir and unity else f"Folder map: {rel_dir or 'repository'}"
+        f"{profile.label} project map"
+        if not rel_dir and profile.is_engine
+        else f"Folder map: {rel_dir or 'repository'}"
     )
-    lines = [BEGIN, f"## {title}", "", _directory_purpose(rel_dir, manifest, unity), ""]
+    lines = [BEGIN, f"## {title}", "", _directory_purpose(rel_dir, manifest, profile), ""]
     if rel_dir in summaries:
         lines.extend([f"**Verified responsibility:** {_summary_cell(summaries[rel_dir])}", ""])
 
     if not rel_dir:
-        lines.extend(_root_intelligence(manifest))
+        lines.extend(_root_intelligence(manifest, profile))
     else:
         lines.extend(_module_intelligence(rel_dir, manifest))
 
@@ -1127,23 +1186,23 @@ def _render_directory(
         for child in children:
             name = PurePosixPath(child).name
             destination = quote(name, safe="") + "/" + map_filename
-            row = f"| [`{name}/`]({destination}) | {_directory_purpose(child, manifest, unity)}"
+            row = f"| [`{name}/`]({destination}) | {_directory_purpose(child, manifest, profile)}"
             if has_summaries:
                 row += f" | {_summary_cell(summaries.get(child, '—'))}"
             lines.append(row + " |")
         lines.append("")
 
     if runtime_files:
-        lines.extend(_unity_runtime_assets_section(runtime_files, manifest, rel_dir))
+        lines.extend(_unity_runtime_assets_section(runtime_files, manifest, rel_dir, profile))
 
     if asset_path_records:
-        lines.extend(_unity_asset_paths_section(asset_path_records))
+        lines.extend(_unity_asset_paths_section(asset_path_records, profile))
 
     if metadata_count and not visible_files:
         lines.extend(
             [
-                f"Unity metadata: {metadata_count} `.meta` sidecar file(s) hidden. "
-                "Never treated as C# dependencies.",
+                f"{profile.label} metadata: {metadata_count} `.meta` sidecar file(s) "
+                f"hidden. Never treated as {profile.source_language_label} dependencies.",
                 "",
             ]
         )
@@ -1170,7 +1229,7 @@ def _render_directory(
         for entry in ordered_files[:visible_limit]:
             filename = PurePosixPath(entry.path).name
             destination = quote(filename, safe="._-~")
-            responsibility = summaries.get(entry.path) or _verified_responsibility(entry)
+            responsibility = summaries.get(entry.path) or _verified_responsibility(entry, profile)
             lines.append(
                 f"| [`{_cell(filename)}`]({destination}) | "
                 f"{_cell(entry.metadata.get('ownership', 'repository'))} | "
@@ -1186,13 +1245,14 @@ def _render_directory(
             )
         if metadata_count:
             lines.append(
-                f"| Unity `.meta` files | generated metadata | {metadata_count} sidecar files are "
-                "intentionally hidden from the table. | — | Never treated as C# dependencies. | — |"
+                f"| {profile.label} `.meta` files | generated metadata | {metadata_count} "
+                "sidecar files are intentionally hidden from the table. | — | Never treated "
+                f"as {profile.source_language_label} dependencies. | — |"
             )
         lines.append("")
 
     lines.extend(_local_calls(rel_dir, manifest))
-    lines.extend(_local_asset_references(rel_dir, manifest))
+    lines.extend(_local_asset_references(rel_dir, manifest, profile))
     lines.extend(_local_violations(rel_dir, manifest))
 
     if rel_dir:
@@ -1218,9 +1278,13 @@ def _parent(path: str) -> str:
     return "" if str(parent) == "." else parent.as_posix()
 
 
-def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
+def _directory_purpose(path: str, manifest: Manifest, profile: ProjectKindProfile) -> str:
     name = PurePosixPath(path).name.lower() if path else ""
-    ownership = classify_ownership(path.rstrip("/") + "/__context__.cs") if path else "repository"
+    ownership = (
+        classify_ownership(path.rstrip("/") + "/__context__.cs", profile.kind)
+        if path
+        else "repository"
+    )
     if ownership == "vendor":
         return (
             "Vendor/third-party boundary; inspect as dependency and avoid project "
@@ -1230,27 +1294,11 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
         return (
             "Generated boundary; change the source/generator rather than files under this folder."
         )
-    purposes = {
-        "assets": "Project-owned Unity assets and source code.",
-        "packages": "Unity package declarations and embedded project packages.",
-        "projectsettings": "Unity project configuration.",
-        "scripts": "C# source code.",
-        "runtime": "Runtime code and assets.",
-        "editor": "Unity Editor-only tooling.",
-        "tests": "Automated tests and their fixtures.",
-        "gameplay": "Gameplay feature implementations.",
-        "ui": "User interface code and assets.",
-        "data": "Authored data and serialized configuration.",
-        "resources": "Assets loaded through Unity Resources APIs.",
-        "scenes": "Unity scenes.",
-        "prefabs": "Reusable Unity prefab assets.",
-        "art": "Visual art assets.",
-        "audio": "Audio assets and configuration.",
-    }
+    purposes = profile.directory_purposes
     if not path:
         return (
-            "Navigation map for the Unity project."
-            if unity
+            f"Navigation map for the {profile.label} project."
+            if profile.is_engine
             else "Navigation map for the repository."
         )
     prefix = path.rstrip("/") + "/" if path else ""
@@ -1272,13 +1320,13 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
             chunk.name
             for entry in source_files
             for chunk in entry.chunks
-            if chunk.type in {"method", "operator"} and chunk.name not in UNITY_LIFECYCLE_METHODS
+            if chunk.type in {"method", "operator"} and chunk.name not in profile.lifecycle_methods
         ]
         operation_text = ""
         if operations:
             unique = list(dict.fromkeys(operations))
             operation_text = "; verified operations include " + ", ".join(unique[:5])
-        return f"Unity source module defining {listed}{suffix}{operation_text}."
+        return f"{profile.label} source module defining {listed}{suffix}{operation_text}."
     files = [
         entry
         for entry in manifest.files
@@ -1287,7 +1335,7 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
     runtime_assets = [
         (entry, _unity_runtime(entry))
         for entry in files
-        if _has_unity_runtime_signal(entry, manifest)
+        if _has_unity_runtime_signal(entry, manifest, profile)
     ]
     if runtime_assets:
         kinds = Counter(_runtime_kind_label(detail) for _entry, detail in runtime_assets)
@@ -1298,16 +1346,21 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
                 for script in _runtime_script_names(detail)
             )
         )
-        purpose = "Unity runtime asset module containing " + ", ".join(
+        purpose = f"{profile.label} runtime asset module containing " + ", ".join(
             f"{count} {kind}" for kind, count in kinds.most_common(4)
         )
         if scripts:
             purpose += "; verified project scripts include " + ", ".join(scripts[:5])
         return purpose + "."
-    asset_paths = {logical for entry in files if (logical := _logical_unity_asset_path(entry.path))}
+    asset_paths = {
+        logical
+        for entry in files
+        if (logical := _logical_unity_asset_path(entry.path, profile))
+    }
     if asset_paths:
         return (
-            f"Path-only navigation for {len(asset_paths)} Unity art/media asset(s); "
+            f"Path-only navigation for {len(asset_paths)} {profile.label} art/media "
+            "asset(s); "
             "no code responsibility is inferred."
         )
     if name in purposes:
@@ -1321,7 +1374,11 @@ def _directory_purpose(path: str, manifest: Manifest, unity: bool) -> str:
     return f"Repository module at `{path}`."
 
 
-def _file_role(entry: FileEntry, graph: DependencyGraph | _EmptyGraph) -> str:
+def _file_role(
+    entry: FileEntry,
+    graph: DependencyGraph | _EmptyGraph,
+    profile: ProjectKindProfile = UNITY_PROFILE,
+) -> str:
     runtime = _unity_runtime(entry)
     if runtime:
         return _runtime_responsibility(entry, runtime)
@@ -1335,22 +1392,17 @@ def _file_role(entry: FileEntry, graph: DependencyGraph | _EmptyGraph) -> str:
         role = ", ".join(labels) if labels else "C# source"
         dependents = graph.in_degree(entry.path)
         return f"{role}; {dependents} dependent file(s)." if dependents else f"{role}."
-    roles = {
-        ".asmdef": "Unity assembly definition.",
-        ".asmref": "Unity assembly reference.",
-        ".unity": "Unity scene.",
-        ".prefab": "Unity prefab.",
-        ".asset": "Serialized Unity asset.",
-        ".meta": "Unity asset identity and importer metadata.",
-        ".json": "JSON configuration or package metadata.",
-    }
-    return roles.get(suffix, "Project file.")
+    return profile.file_roles.get(suffix, "Project file.")
 
 
-def _root_intelligence(manifest: Manifest) -> list[str]:
+def _root_intelligence(
+    manifest: Manifest, profile: ProjectKindProfile = UNITY_PROFILE
+) -> list[str]:
     project = manifest.project
     metrics = project.get("metrics", {})
     lines = ["### Project overview", ""]
+    if project.get("kind") == COCOS_KIND:
+        lines.extend(_cocos_project_overview(project))
     if project.get("kind") == "unity":
         lines.append(
             f"- Unity `{project.get('unity_version', 'unknown')}`; analyzer: "
@@ -1399,18 +1451,23 @@ def _root_intelligence(manifest: Manifest) -> list[str]:
         )
         + "."
     )
-    lines.append(
-        f"- Exact Unity serialized GUID edges: {metrics.get('serialized_dependencies', 0)}; "
-        f"project-owned edges: {metrics.get('project_owned_dependencies', 0)}; "
-        f"project-owned circular components: {metrics.get('project_owned_cycles', 0)}."
-    )
-    lines.extend(_root_unity_runtime(manifest))
+    if profile.is_engine:
+        lines.append(
+            f"- Exact {profile.label} serialized {profile.serialized_id_label} edges: "
+            f"{metrics.get('serialized_dependencies', 0)}; "
+            f"project-owned edges: {metrics.get('project_owned_dependencies', 0)}; "
+            f"project-owned circular components: {metrics.get('project_owned_cycles', 0)}."
+        )
+    if profile.kind == COCOS_KIND:
+        lines.extend(_root_cocos_runtime(manifest, profile))
+    else:
+        lines.extend(_root_unity_runtime(manifest, profile))
     lines.extend(_key_files(manifest))
     lines.extend(_architecture_summary(manifest))
     lines.extend(_cycle_summary(manifest))
     lines.extend(_feature_flows(manifest))
-    lines.extend(_ownership_summary(manifest))
-    lines.extend(_testing_rules(manifest))
+    lines.extend(_ownership_summary(manifest, profile))
+    lines.extend(_testing_rules(manifest, profile))
     lines.extend(
         [
             "### Focus and token controls",
@@ -1608,7 +1665,9 @@ def _feature_flows(manifest: Manifest) -> list[str]:
     return lines
 
 
-def _ownership_summary(manifest: Manifest) -> list[str]:
+def _ownership_summary(
+    manifest: Manifest, profile: ProjectKindProfile = UNITY_PROFILE
+) -> list[str]:
     project = manifest.project
     counts = project.get("ownership_counts", {})
     lines = ["### Ownership boundaries", ""]
@@ -1628,54 +1687,31 @@ def _ownership_summary(manifest: Manifest) -> list[str]:
             + ", ".join(f"`{p}`" for p in generated)
             + "."
         )
-    lines.extend(
-        [
-            "- `.csproj`, `.sln`, and `.slnx` are Unity-generated even when present "
-            "at repository root.",
-            "",
-        ]
-    )
+    lines.extend([*profile.ownership_notes, ""])
     return lines
 
 
-def _testing_rules(manifest: Manifest) -> list[str]:
+def _testing_rules(
+    manifest: Manifest, profile: ProjectKindProfile = UNITY_PROFILE
+) -> list[str]:
     project = manifest.project
     tests = project.get("test_files", [])
     version = project.get("unity_version", "the recorded Unity version")
     lines = ["### Testing and change rules", ""]
-    if project.get("kind") == "unity":
-        lines.extend(
-            [
-                f"- Validate C# changes by compiling in Unity `{version}`; run relevant "
-                "EditMode/PlayMode tests in Unity Test Runner.",
-                "- For CLI automation, use Unity `-batchmode -runTests` with the intended "
-                "test platform and capture its result XML.",
-                "- Change `Packages/manifest.json` through Unity Package Manager when "
-                "possible; review `packages-lock.json` together.",
-                "- Prefer Unity Editor changes for `ProjectSettings`; do not hand-edit "
-                "generated solution/project files.",
-                "- Treat vendor, package, and generated boundaries above as read-only "
-                "unless the task explicitly owns them.",
-            ]
-        )
-    else:
-        lines.append(
-            "- Run the repository's detected test/build commands before changing public APIs."
-        )
+    lines.extend(rule.format(version=version) for rule in profile.testing_rules)
     if tests:
         lines.append(
             "- Detected test files: " + ", ".join(f"`{path}`" for path in tests[:12]) + "."
         )
     else:
-        lines.append(
-            "- No project test file was detected; Unity compilation and targeted "
-            "manual validation remain required."
-        )
+        lines.append(profile.no_test_note)
     lines.append("")
     return lines
 
 
-def _verified_responsibility(entry: FileEntry) -> str:
+def _verified_responsibility(
+    entry: FileEntry, profile: ProjectKindProfile = UNITY_PROFILE
+) -> str:
     ownership = entry.metadata.get("ownership")
     if ownership == "unity-generated":
         return "Unity-generated project/solution file; regenerate instead of hand-editing."
@@ -1713,10 +1749,12 @@ def _verified_responsibility(entry: FileEntry) -> str:
                 subject = "C# type"
             methods = [chunk.name for chunk in entry.chunks if chunk.type in {"method", "operator"}]
             lifecycle = list(
-                dict.fromkeys(name for name in methods if name in UNITY_LIFECYCLE_METHODS)
+                dict.fromkeys(name for name in methods if name in profile.lifecycle_methods)
             )
             operations = list(
-                dict.fromkeys(name for name in methods if name not in UNITY_LIFECYCLE_METHODS)
+                dict.fromkeys(
+                    name for name in methods if name not in profile.lifecycle_methods
+                )
             )
             facts = [f"{subject} defining {', '.join(labels)}"]
             if lifecycle:
@@ -1797,7 +1835,9 @@ def _local_calls(rel_dir: str, manifest: Manifest) -> list[str]:
     return lines
 
 
-def _local_asset_references(rel_dir: str, manifest: Manifest) -> list[str]:
+def _local_asset_references(
+    rel_dir: str, manifest: Manifest, profile: ProjectKindProfile = UNITY_PROFILE
+) -> list[str]:
     runtime_kinds = {
         "animator_motion",
         "prefab_instance",
@@ -1814,7 +1854,7 @@ def _local_asset_references(rel_dir: str, manifest: Manifest) -> list[str]:
     ]
     if not refs:
         return []
-    lines = ["### Unity runtime references", ""]
+    lines = [f"### {profile.label} runtime references", ""]
     for item in refs[:15]:
         kinds = ", ".join(sorted(runtime_kinds.intersection(item.get("kinds", []))))
         evidence = item.get("field") or item.get("owner_path") or item.get("symbol")
@@ -1935,7 +1975,7 @@ def save_summaries(root: Path, summaries: Mapping[str, str]) -> Path:
 
 def summary_targets(manifest: Manifest, root: Path, max_depth: int = -1) -> set[str]:
     """Return file and folder paths that can appear in generated maps."""
-    directories = _collect_directories(manifest, _is_unity_project(root), max_depth)
+    directories = _collect_directories(manifest, resolve_profile(root, manifest), max_depth)
     files = {
         entry.path
         for entry in manifest.files
@@ -1992,6 +2032,7 @@ __all__ = [
     "parse_summary_assignment",
     "remove_managed_map",
     "resolve_map_filenames",
+    "resolve_profile",
     "save_summaries",
     "summary_targets",
 ]

@@ -56,6 +56,7 @@ UNITY_STREAMED_ASSET_EXTENSIONS: frozenset[str] = frozenset(
         ".mat",
         ".overridecontroller",
         ".prefab",
+        ".scene",
         ".unity",
     }
 )

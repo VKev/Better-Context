@@ -84,11 +84,11 @@ def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
         prog="better-context-unity",
-        description="Local Unity/C# codebase intelligence and safe hierarchical AGENTS.md/CLAUDE.md maps.",
+        description="Local Unity/C# and Cocos Creator/TypeScript codebase intelligence with safe hierarchical AGENTS.md/CLAUDE.md maps.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  better-context-unity agents              Refresh Unity AGENTS.md maps
+  better-context-unity agents              Refresh project maps (Unity or Cocos)
   better-context-unity agents --map-file AGENTS.md --map-file CLAUDE.md
                                            Refresh Codex and Claude maps from one scan
   better-context-unity scan                Generate only the manifest
@@ -314,6 +314,50 @@ Agent Workflow:
         "--format", choices=["json", "human", "markdown"], default="json"
     )
 
+    cocos_parser = subparsers.add_parser(
+        "cocos",
+        help="Query Cocos Creator scenes, prefabs, components, and asset references",
+    )
+    cocos_subparsers = cocos_parser.add_subparsers(dest="cocos_command", required=True)
+
+    cocos_list_parser = cocos_subparsers.add_parser(
+        "list",
+        help="List Cocos runtime assets from the saved manifest",
+    )
+    cocos_list_parser.add_argument("--kind", help="Filter by asset kind")
+    cocos_list_parser.add_argument(
+        "--limit", type=int, default=50, help="Maximum assets (default: 50)"
+    )
+    cocos_list_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
+
+    cocos_show_parser = cocos_subparsers.add_parser(
+        "show",
+        help="Show full runtime data for one project-relative Cocos asset",
+    )
+    cocos_show_parser.add_argument("path", help="Project-relative Cocos asset path")
+    cocos_show_parser.add_argument(
+        "--depth",
+        type=int,
+        default=2,
+        help="Maximum node hierarchy depth (-1 = unlimited; default: 2)",
+    )
+    cocos_show_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
+
+    cocos_components_parser = cocos_subparsers.add_parser(
+        "components",
+        help="List resolved Cocos components from scene or prefab assets",
+    )
+    cocos_components_parser.add_argument("--asset", help="Filter by exact asset path")
+    cocos_components_parser.add_argument("--type", help="Filter by exact component type")
+    cocos_components_parser.add_argument("--object", help="Filter by exact node path")
+    cocos_components_parser.add_argument(
+        "--format", choices=["json", "human", "markdown"], default="json"
+    )
+
     # --- stats command ---
     stats_parser = subparsers.add_parser("stats", help="Calculate metrics and find important files (PageRank)")
     stats_parser.add_argument(
@@ -504,6 +548,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "deps": cmd_deps,
         "editor": cmd_editor,
         "unity": cmd_unity,
+        "cocos": cmd_cocos,
     }
 
     handler = command_handlers.get(args.command)
@@ -591,8 +636,11 @@ def _load_fresh_unity_manifest(args: argparse.Namespace) -> Optional[Manifest]:
         print("[hint] Run 'better-context-unity agents' to refresh it.")
         return None
 
-    if not isinstance(manifest.project.get("unity_runtime"), dict):
-        print("[error] Manifest does not contain Unity runtime intelligence.")
+    has_runtime = isinstance(manifest.project.get("unity_runtime"), dict) or isinstance(
+        manifest.project.get("engine_runtime"), dict
+    )
+    if not has_runtime:
+        print("[error] Manifest does not contain engine runtime intelligence.")
         print("[hint] Run 'better-context-unity agents' with Better Context Unity 1.3.0 or newer.")
         return None
     return manifest
@@ -667,9 +715,20 @@ def _compact_unity_asset(value: dict[str, Any], default_path: str = "") -> dict[
 
 
 
+def _engine_runtime(entry: Any) -> Any:
+    """Per-file runtime detail written by whichever engine analyzer ran."""
+    for slot in ("unity_runtime", "engine_runtime"):
+        value = entry.metadata.get(slot)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
 def _unity_assets(manifest: Manifest) -> list[dict[str, Any]]:
     """Read compact assets while accepting list and path-keyed manifest forms."""
     runtime = manifest.project.get("unity_runtime", {})
+    if not isinstance(runtime, dict) or not runtime:
+        runtime = manifest.project.get("engine_runtime", {})
     raw_assets = runtime.get("assets", []) if isinstance(runtime, dict) else []
     assets: list[dict[str, Any]] = []
     if isinstance(raw_assets, dict):
@@ -684,7 +743,7 @@ def _unity_assets(manifest: Manifest) -> list[dict[str, Any]]:
 
     if not assets:
         for entry in manifest.files:
-            value = entry.metadata.get("unity_runtime")
+            value = _engine_runtime(entry)
             if isinstance(value, dict):
                 assets.append(_compact_unity_asset(value, entry.path))
 
@@ -799,6 +858,11 @@ def _unity_cell(value: Any) -> str:
     return str(value)
 
 
+#: Engine label used by the shared human/markdown formatters. `cmd_cocos` switches it
+#: so one set of formatters can serve both engines without duplicated code.
+_ENGINE_LABEL = "Unity"
+
+
 def _format_unity_assets(assets: list[dict[str, Any]], fmt: str, total: int) -> str:
     if fmt == "json":
         return json.dumps(
@@ -829,7 +893,7 @@ def _format_unity_assets(assets: list[dict[str, Any]], fmt: str, total: int) -> 
         lines.extend(["", f"Showing {len(assets)} of {total} matching asset(s)."])
         return "\n".join(lines)
 
-    lines = [f"Unity runtime assets: showing {len(assets)} of {total}"]
+    lines = [f"{_ENGINE_LABEL} runtime assets: showing {len(assets)} of {total}"]
     for asset in assets:
         scripts = _unity_cell(asset.get("script_types", []))
         model_suffix = ""
@@ -872,7 +936,7 @@ def _format_unity_show(runtime: dict[str, Any], fmt: str) -> str:
             )
         return "\n".join(lines)
 
-    lines = [f"Unity asset: {_unity_cell(runtime.get('path'))}"]
+    lines = [f"{_ENGINE_LABEL} asset: {_unity_cell(runtime.get('path'))}"]
     for key, value in runtime.items():
         if key == "path":
             continue
@@ -924,7 +988,7 @@ def _format_unity_bindings(bindings: list[dict[str, Any]], fmt: str) -> str:
 def _unity_components(manifest: Manifest) -> list[dict[str, Any]]:
     components: list[dict[str, Any]] = []
     for entry in manifest.files:
-        runtime = entry.metadata.get("unity_runtime")
+        runtime = _engine_runtime(entry)
         if not isinstance(runtime, dict):
             continue
         for obj in runtime.get("objects", []):
@@ -965,7 +1029,7 @@ def _format_unity_components(components: list[dict[str, Any]], fmt: str) -> str:
                 f"{_unity_cell(item.get('enabled', '—'))} | {fields} |"
             )
         return "\n".join(lines)
-    lines = [f"Unity components: {len(components)}"]
+    lines = [f"{_ENGINE_LABEL} components: {len(components)}"]
     for item in components:
         type_name = item.get("qualified_type") or item.get("type", "—")
         lines.append(
@@ -1063,6 +1127,22 @@ def cmd_editor(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_cocos(args: argparse.Namespace) -> int:
+    """Query Cocos runtime intelligence from a verified fresh manifest.
+
+    The Cocos analyzer writes the same asset/object/component records the Unity one
+    does, so this command reuses the shared readers and formatters; only the
+    subcommand namespace differs.
+    """
+    global _ENGINE_LABEL
+    _ENGINE_LABEL = "Cocos"
+    args.unity_command = args.cocos_command
+    if args.cocos_command == "bindings":
+        print("[error] Cocos assets have no persistent event bindings to list.")
+        return 1
+    return cmd_unity(args)
+
+
 def cmd_unity(args: argparse.Namespace) -> int:
     """Query Unity runtime intelligence from a verified fresh manifest."""
     manifest = _load_fresh_unity_manifest(args)
@@ -1106,7 +1186,7 @@ def cmd_unity(args: argparse.Namespace) -> int:
             (item for item in manifest.files if item.path.casefold() == target.casefold()),
             None,
         )
-        full = entry.metadata.get("unity_runtime") if entry is not None else None
+        full = _engine_runtime(entry) if entry is not None else None
         if compact is None and not isinstance(full, dict):
             print(f"[error] Unity runtime asset not found in manifest: {target}")
             return 1

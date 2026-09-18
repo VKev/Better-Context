@@ -105,6 +105,44 @@ UnityProject/
     └── AGENTS.md
 ```
 
+## Cocos Creator projects
+
+Better Context recognizes two game-engine project kinds and one plain-repository mode:
+
+| Kind | Detected from | Maps written under |
+|---|---|---|
+| `unity` | `Assets/` + `ProjectSettings/ProjectVersion.txt` | `Assets`, `Packages`, `ProjectSettings` |
+| `cocos` | `assets/` + `package.json` with `creator.version` | `assets`, `extensions`, `settings`, `build-templates` |
+| `repository` | anything else | the whole repository |
+
+Unity is checked first so a Unity project carrying Node tooling is never mistaken for a
+Cocos one. Override the result with `"project_kind": "unity" | "cocos" | "repository"`
+in `.ctx.json` when a repository is genuinely ambiguous; `auto` is the default.
+
+For a Cocos project the scan additionally resolves the serialized layer that a plain
+text search cannot:
+
+- `.scene` / `.prefab` / `.anim` JSON is parsed through its `__id__` graph into a node
+  hierarchy with components.
+- Component `__type__` values resolve to their TypeScript file, either by the
+  `@ccclass('Name')` registration or by the 23-character class-id Cocos compresses out
+  of the script's uuid (kept in the sibling `.meta`). A type that resolves to neither is
+  reported as unresolved, never guessed.
+- `{"__uuid__": ...}` asset references become verified dependency edges.
+- The root map records the Creator version, the folder-to-bundle contract from
+  `assets/*.meta`, the start scene, and the project's editor extensions.
+
+Inspect the same data from the CLI with the `cocos` subcommand:
+
+```bash
+better-context-unity cocos list --format human
+better-context-unity cocos show assets/scene/main.scene --depth 2
+better-context-unity cocos components --type PlayerController
+```
+
+`unity …` and `editor …` remain Unity-only; `editor` no-ops on a non-Unity root. Cocos
+needs no editor bridge because its `.meta` files are already readable JSON.
+
 ## Multi-client maps (AGENTS.md and CLAUDE.md)
 
 One scan can own the map block in more than one instruction file, so a Codex

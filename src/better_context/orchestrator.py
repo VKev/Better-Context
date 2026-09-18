@@ -58,6 +58,12 @@ from .roslyn import RoslynUnavailableError, analyze_csharp_project, discover_pro
 from .scanner import FileInfo, FileInventory, walk_repository
 from .staleness import save_staleness_info
 from .unity_editor import get_editor_snapshot_status
+from .cocos_runtime import (
+    analyze_cocos_runtime,
+    collect_cocos_project_facts,
+    collect_cocos_reference_edges,
+)
+from .project_kind import COCOS_KIND, UNITY_KIND, resolve_project_kind
 from .unity_intelligence import (
     classify_ownership,
     collect_project_facts,
@@ -201,6 +207,10 @@ class Orchestrator:
         self._edge_details: List[Dict[str, Any]] = []
         self._csharp_calls: List[Dict[str, Any]] = []
         self._unity_runtime: Optional[UnityRuntimeAnalysis] = None
+        self._cocos_runtime: Optional[dict[str, Any]] = None
+        self._project_kind: str = resolve_project_kind(
+            self.root, getattr(self.config, "project_kind", "auto")
+        )
         self._analysis_engine = "language-adapters"
     
     def set_progress_callback(self, callback: ProgressCallback) -> None:
@@ -401,6 +411,7 @@ class Orchestrator:
         self._edge_details = []
         self._csharp_calls = []
         self._unity_runtime = None
+        self._cocos_runtime = None
         self._analysis_engine = "language-adapters"
         parsed: Dict[str, Any] = {}
         errors: List[ParseError] = []
@@ -541,6 +552,10 @@ class Orchestrator:
         for detail in self._edge_details:
             graph.add_edge(detail["source"], detail["target"])
 
+        if self._project_kind == COCOS_KIND:
+            self._analyze_cocos(inventory, graph)
+            return
+
         if is_unity_project(self.root):
             editor_status = get_editor_snapshot_status(self.root, self.config.output_dir)
             editor_snapshot = (
@@ -629,7 +644,29 @@ class Orchestrator:
                 })
 
         self._edge_details = _merge_edge_details(self._edge_details)
-    
+
+    def _analyze_cocos(self, inventory: FileInventory, graph: DependencyGraph) -> None:
+        """Analyze Cocos scenes/prefabs and add their verified uuid edges."""
+        self._cocos_runtime = analyze_cocos_runtime(
+            self.root,
+            [entry.path for entry in inventory.files],
+            scope=self.config.asset_scope,
+        )
+        for edge in collect_cocos_reference_edges(self._cocos_runtime):
+            graph.add_edge(edge["source"], edge["target"])
+            self._edge_details.append(
+                {
+                    "source": edge["source"],
+                    "target": edge["target"],
+                    "kinds": [edge["kind"]],
+                    "symbols": [],
+                    "lines": [],
+                    "confidence": edge["confidence"],
+                    "engine": edge["engine"],
+                }
+            )
+        self._edge_details = _merge_edge_details(self._edge_details)
+
     def _build_manifest(
         self,
         inventory: FileInventory,
@@ -707,6 +744,13 @@ class Orchestrator:
                 if runtime_metadata is not None:
                     entry.metadata["unity_runtime"] = runtime_metadata
 
+        if self._cocos_runtime is not None:
+            cocos_assets = self._cocos_runtime.get("assets", {})
+            for entry in files:
+                runtime_metadata = cocos_assets.get(entry.path)
+                if runtime_metadata is not None:
+                    entry.metadata["engine_runtime"] = runtime_metadata
+
         source_files = [
             entry for entry in files
             if entry.language and not entry.path.endswith("AGENTS.md")
@@ -738,11 +782,21 @@ class Orchestrator:
 
         analyzed_files = [entry for entry in files if not is_map_path(entry.path)]
         analyzed_source_files = [entry for entry in analyzed_files if entry.language]
-        project = collect_project_facts(self.root, [entry.path for entry in analyzed_files])
+        analyzed_paths = [entry.path for entry in analyzed_files]
+        if self._project_kind == COCOS_KIND:
+            project = collect_cocos_project_facts(self.root, analyzed_paths)
+        else:
+            project = collect_project_facts(self.root, analyzed_paths)
         project["analysis_engine"] = self._analysis_engine
         if self._unity_runtime is not None:
             project["unity_runtime"] = self._unity_runtime.summary
             project["unity_analysis_engine"] = "unity-yaml-fbx-structured-v1"
+        if self._cocos_runtime is not None:
+            summary = {
+                key: value for key, value in self._cocos_runtime.items() if key != "assets"
+            }
+            project["engine_runtime"] = summary
+            project["engine_analysis_engine"] = "cocos-json-serialized-v1"
         ownership_by_path = {
             entry.path: entry.metadata.get("ownership", "repository") for entry in analyzed_files
         }
@@ -767,6 +821,8 @@ class Orchestrator:
             "prefab_instance",
             "animator_motion",
             "unity_event",
+            "cocos_asset_uuid",
+            "cocos_component",
         }
         project["metrics"] = {
             "files": len(analyzed_files),

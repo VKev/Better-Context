@@ -144,11 +144,13 @@ def collect_current_hashes(
         max_file_size_kb=config.max_file_size_kb,
     )
     
-    # Exclude AGENTS.md files (our output, not source files)
+    # Exclude generated instruction maps (our output, not source files)
+    from .agents_map import is_map_path
+
     return {
         f.path: f.content_hash
         for f in inventory.files
-        if not f.path.endswith("AGENTS.md")
+        if not is_map_path(f.path)
     }
 
 

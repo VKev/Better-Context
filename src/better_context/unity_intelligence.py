@@ -10,6 +10,8 @@ from contextlib import suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from .project_kind import COCOS_KIND, UNITY_KIND, detect_project_kind, is_unity_project
+
 GUID_PATTERN = re.compile(r"\bguid:\s*([0-9a-fA-F]{32})\b")
 META_GUID_PATTERN = re.compile(r"^guid:\s*([0-9a-fA-F]{32})\s*$", re.MULTILINE)
 VENDOR_SEGMENTS = {
@@ -34,19 +36,33 @@ GENERATED_SEGMENTS = {
     "obj",
 }
 
+# Cocos Creator regenerates these from `assets/` + `.meta`; `tools/` and `docs/` are
+# authored here, so the generic "tools is vendor" rule must not apply.
+COCOS_GENERATED_SEGMENTS = {
+    "library",
+    "temp",
+    "build",
+    "local",
+    "profiles",
+    "node_modules",
+}
+COCOS_VENDOR_SEGMENTS = {
+    "thirdparty",
+    "third-party",
+    "external",
+    "vendor",
+}
+COCOS_PROJECT_ROOTS = {"assets", "extensions", "tools", "docs", "build-templates"}
 
-def is_unity_project(root: Path) -> bool:
-    return (root / "Assets").is_dir() and (
-        root / "ProjectSettings" / "ProjectVersion.txt"
-    ).is_file()
 
-
-def classify_ownership(path: str) -> str:
-    """Classify edit ownership from path and Unity file conventions."""
+def classify_ownership(path: str, kind: str = UNITY_KIND) -> str:
+    """Classify edit ownership from path and engine file conventions."""
     normalized = path.replace("\\", "/")
     pure = PurePosixPath(normalized)
     parts = [part.lower() for part in pure.parts]
     suffix = pure.suffix.lower()
+    if kind == COCOS_KIND:
+        return _classify_cocos_ownership(parts)
     if suffix in {".csproj", ".sln", ".slnx"}:
         return "unity-generated"
     if any(part in GENERATED_SEGMENTS or part.startswith("generated") for part in parts):
@@ -58,6 +74,18 @@ def classify_ownership(path: str) -> str:
     if any(part in VENDOR_SEGMENTS for part in parts):
         return "vendor"
     if parts and parts[0] == "assets":
+        return "project-owned"
+    return "repository"
+
+
+def _classify_cocos_ownership(parts: list[str]) -> str:
+    if any(part in COCOS_GENERATED_SEGMENTS for part in parts):
+        return "generated"
+    if parts and parts[0] == "settings":
+        return "project-configuration"
+    if any(part in COCOS_VENDOR_SEGMENTS for part in parts):
+        return "vendor"
+    if parts and parts[0] in COCOS_PROJECT_ROOTS:
         return "project-owned"
     return "repository"
 

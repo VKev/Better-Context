@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents_map import DEFAULT_MAP_FILENAMES, MAP_FILENAMES
+from .project_kind import CONFIGURABLE_KINDS
 
 
 @dataclass
@@ -39,6 +40,13 @@ class Config:
     pagerank_damping: float = 0.85
     pagerank_iterations: int = 20
 
+    # Project kind: "auto" detects Unity vs Cocos Creator vs plain repository.
+    project_kind: str = "auto"
+
+    # Engine asset intelligence. `asset_scope` is the kind-neutral name;
+    # `unity_asset_scope` is kept as its alias for existing configurations.
+    asset_scope: str = "project-owned"
+
     # Unity runtime intelligence
     unity_asset_scope: str = "project-owned"
     unity_agents_asset_limit: int = 12
@@ -50,6 +58,15 @@ class Config:
 
     # Languages
     language_overrides: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Keep the neutral name and its Unity-era alias in sync, whichever one the
+        # project configured.
+        default = "project-owned"
+        if self.unity_asset_scope != default and self.asset_scope == default:
+            self.asset_scope = self.unity_asset_scope
+        elif self.asset_scope != default and self.unity_asset_scope == default:
+            self.unity_asset_scope = self.asset_scope
 
 
 def load_config(root: Path, config_path: Path | None = None) -> Config:
@@ -138,6 +155,15 @@ def validate_config(config: Config) -> list[str]:
         "all",
     }:
         errors.append("unity_asset_scope must be 'project-owned' or 'all'")
+
+    if not isinstance(config.asset_scope, str) or config.asset_scope not in {
+        "project-owned",
+        "all",
+    }:
+        errors.append("asset_scope must be 'project-owned' or 'all'")
+
+    if not isinstance(config.project_kind, str) or config.project_kind not in CONFIGURABLE_KINDS:
+        errors.append("project_kind must be one of " + ", ".join(CONFIGURABLE_KINDS))
 
     if (
         not isinstance(config.unity_agents_asset_limit, int)

@@ -79,6 +79,27 @@ DEFAULT_IGNORES: List[str] = [
 ]
 
 
+#: Regenerated Cocos Creator roots. They are lowercase and would otherwise collide
+#: with authored directories in ordinary repositories, so they are only ignored once
+#: the project is identified as a Cocos Creator project.
+COCOS_GENERATED_IGNORES: List[str] = [
+    'library/',
+    'temp/',
+    'local/',
+    'profiles/',
+    'build/',
+]
+
+
+def engine_ignores(root: Path) -> List[str]:
+    """Return ignore patterns that only apply to a specific engine's project layout."""
+    from .project_kind import COCOS_KIND, detect_project_kind
+
+    if detect_project_kind(root) == COCOS_KIND:
+        return list(COCOS_GENERATED_IGNORES)
+    return []
+
+
 def load_ignore_patterns(root: Path, filename: str = '.ctxignore') -> List[str]:
     """
     Load ignore patterns from .ctxignore file and combine with defaults.
@@ -91,7 +112,8 @@ def load_ignore_patterns(root: Path, filename: str = '.ctxignore') -> List[str]:
         Combined list of patterns (defaults + user patterns)
     """
     patterns = list(DEFAULT_IGNORES)
-    
+    patterns.extend(engine_ignores(root))
+
     ignore_file = root / filename
     if ignore_file.exists():
         try:
