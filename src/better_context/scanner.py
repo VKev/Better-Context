@@ -368,7 +368,14 @@ def walk_repository(
                 continue
             
             # Check file size
-            indexed_binary = abs_path.suffix.lower() in INDEXED_BINARY_EXTENSIONS
+            # Imported/custom Unity assets must stay in the inventory even when
+            # binary or over the source-code budget. Their payload isn't code.
+            unity_imported = (
+                rel_path.startswith(("Assets/", "Packages/"))
+                and not rel_path.endswith(".meta")
+                and abs_path.with_name(abs_path.name + ".meta").is_file()
+            )
+            indexed_binary = abs_path.suffix.lower() in INDEXED_BINARY_EXTENSIONS or unity_imported
             oversized_streamed_unity = stat.st_size > max_file_size_bytes and (
                 is_streamed_unity_asset(abs_path) or indexed_binary
             )
@@ -393,8 +400,14 @@ def walk_repository(
             # Compute hash
             content_hash = compute_file_hash(
                 abs_path,
-                -1 if abs_path.suffix.lower() == ".fbx" else 65536,
+                -1 if not binary or abs_path.suffix.lower() == ".fbx" else 65536,
             )
+            if binary and abs_path.suffix.lower() != ".fbx":
+                # Cheap invalidation for large imported payloads, including edits
+                # beyond the sampled prefix; no decoding or full texture/audio read.
+                content_hash = hashlib.sha256(
+                    f"{content_hash}:{stat.st_size}:{stat.st_mtime_ns}".encode()
+                ).hexdigest()[:16]
             
             # Add to inventory
             inventory.files.append(FileInfo(

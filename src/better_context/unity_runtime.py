@@ -17,6 +17,12 @@ from typing import Any
 
 from .fbx_runtime import inspect_fbx
 from .unity_intelligence import classify_ownership
+from .unity_sources import (
+    EXTRA_ASSET_SUFFIXES,
+    MAX_SOURCE_BYTES,
+    SOURCE_KINDS,
+    inspect_source_asset,
+)
 
 _ASSET_SUFFIXES = {
     ".aif",
@@ -87,12 +93,8 @@ _DOCUMENT_HEADER = re.compile(
     r"(?P<stripped>\s+stripped)?\s*$"
 )
 _TYPE_LINE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*):\s*$")
-_FIELD = re.compile(
-    r"^(?P<indent>\s*)(?P<key>[A-Za-z_][A-Za-z0-9_ ]*):\s*(?P<value>.*)$"
-)
-_LIST_FIELD = re.compile(
-    r"^(?P<indent>\s*)-\s+(?P<key>[A-Za-z_][A-Za-z0-9_ ]*):\s*(?P<value>.*)$"
-)
+_FIELD = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z_][A-Za-z0-9_ ]*):\s*(?P<value>.*)$")
+_LIST_FIELD = re.compile(r"^(?P<indent>\s*)-\s+(?P<key>[A-Za-z_][A-Za-z0-9_ ]*):\s*(?P<value>.*)$")
 _BARE_LIST = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>\{.*\})\s*$")
 _BARE_LIST_START = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>\{.*)$")
 _META_GUID = re.compile(r"^guid:\s*([0-9a-fA-F]{32})\s*$", re.MULTILINE)
@@ -259,6 +261,15 @@ class _Document:
     lines: list[tuple[int, str]]
 
 
+class _GuidIndex(dict[str, list[str]]):
+    """Shared forward/reverse lookup; avoid rebuilding an O(N) map per asset."""
+
+    def __init__(self, values: dict[str, list[str]], paths: Iterable[str]) -> None:
+        super().__init__(values)
+        self.known_paths = set(paths)
+        self.by_path = {path: guid for guid, targets in values.items() for path in targets}
+
+
 def analyze_unity_runtime(
     root: Path,
     inventory: Any,
@@ -287,18 +298,17 @@ def analyze_unity_runtime(
     ):
         for raw_path in getattr(inventory, attribute, []):
             path = _normalize(str(raw_path))
-            if PurePosixPath(path).suffix.lower() in _ASSET_SUFFIXES:
+            if (
+                PurePosixPath(path).suffix.lower() in _ASSET_SUFFIXES | EXTRA_ASSET_SUFFIXES
+                or root.joinpath(path + ".meta").is_file()
+            ):
                 inventory_by_path.setdefault(path, None)
     guid_to_assets = _build_guid_index(inventory_by_path)
     editor_assets = (
-        editor_snapshot.get("assets_by_path", {})
-        if isinstance(editor_snapshot, dict)
-        else {}
+        editor_snapshot.get("assets_by_path", {}) if isinstance(editor_snapshot, dict) else {}
     )
     editor_scripts = (
-        editor_snapshot.get("scripts_by_guid", {})
-        if isinstance(editor_snapshot, dict)
-        else {}
+        editor_snapshot.get("scripts_by_guid", {}) if isinstance(editor_snapshot, dict) else {}
     )
     for editor_path, editor_asset in editor_assets.items():
         if not isinstance(editor_asset, dict):
@@ -310,16 +320,21 @@ def analyze_unity_runtime(
         path = _normalize(str(script.get("path", ""))) if isinstance(script, dict) else ""
         if path and _GUID.fullmatch(guid):
             guid_to_assets.setdefault(guid, []).append(path)
-    guid_to_assets = {
-        guid: sorted(set(paths)) for guid, paths in guid_to_assets.items()
-    }
+    guid_to_assets = {guid: sorted(set(paths)) for guid, paths in guid_to_assets.items()}
+    guid_to_assets = _GuidIndex(guid_to_assets, inventory_by_path)
     script_symbols = _build_script_symbol_index(entries_by_path)
 
     analysis = UnityRuntimeAnalysis()
     candidates = []
     skipped_non_owned = 0
     for path, item in inventory_by_path.items():
-        if PurePosixPath(path).suffix.lower() not in _ASSET_SUFFIXES:
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix in {".meta", ".cs"} or PurePosixPath(path).name in {"AGENTS.md", "CLAUDE.md"}:
+            continue
+        if (
+            suffix not in _ASSET_SUFFIXES | EXTRA_ASSET_SUFFIXES
+            and path + ".meta" not in inventory_by_path
+        ):
             continue
         ownership = _ownership(path, entries_by_path.get(path))
         if scope != "all" and ownership != scope:
@@ -390,6 +405,24 @@ def _analyze_asset(
     }
     absolute = getattr(inventory_entry, "absolute_path", root / Path(path))
     suffix = PurePosixPath(path).suffix.lower()
+    if suffix in SOURCE_KINDS:
+        try:
+            if Path(absolute).stat().st_size > MAX_SOURCE_BYTES:
+                raise ValueError("Source asset exceeds the 16 MiB structural parsing budget.")
+            source = Path(absolute).read_text(encoding="utf-8-sig")
+            known_paths = getattr(guid_to_assets, "known_paths", None)
+            if known_paths is None:
+                known_paths = {item for paths in guid_to_assets.values() for item in paths}
+                known_paths.update(entries_by_path)
+            base.update(inspect_source_asset(path, source, known_paths, guid_to_assets))
+        except (OSError, ValueError, RecursionError) as error:
+            return _failed_asset(
+                base, analysis, path, "source_parse_error", str(error), "parse_error"
+            )
+        if editor_asset is not None:
+            _merge_editor_asset(base, editor_asset, guid_to_assets)
+        _emit_edges(base, analysis)
+        return base
     if editor_asset is not None and suffix not in _YAML_SUFFIXES and suffix != ".fbx":
         return _analyze_editor_asset(base, editor_asset, guid_to_assets, analysis)
     if PurePosixPath(path).suffix.lower() == ".fbx":
@@ -401,10 +434,33 @@ def _analyze_asset(
             analysis,
         )
     try:
-        raw = Path(absolute).read_bytes()
+        # Inventory of imported/custom binaries must not read multi-GB payloads.
+        with Path(absolute).open("rb") as stream:
+            raw = stream.read(4096)
+        if suffix in _YAML_SUFFIXES or raw.lstrip(b"\xef\xbb\xbf \r\n").startswith(
+            (b"%YAML", b"--- !u!")
+        ):
+            raw = Path(absolute).read_bytes()
     except OSError as error:
         return _failed_asset(base, analysis, path, "read_error", str(error), "parse_error")
+    if suffix not in _YAML_SUFFIXES and not raw.lstrip(b"\xef\xbb\xbf \r\n").startswith(
+        (b"%YAML", b"--- !u!")
+    ):
+        base.update(
+            {
+                "inspection": "inventory-only",
+                "confidence": "partial",
+                "size_bytes": Path(absolute).stat().st_size,
+                "responsibility": (
+                    "Imported Unity asset; detailed facts require its Unity importer."
+                ),
+                "high_signal": 0,
+            }
+        )
+        return base
     if b"\x00" in raw[:4096]:
+        if editor_asset is not None:
+            return _analyze_editor_asset(base, editor_asset, guid_to_assets, analysis)
         return _failed_asset(
             base,
             analysis,
@@ -490,9 +546,7 @@ def _analyze_asset(
         _merge_editor_asset(base, editor_asset, guid_to_assets)
     base["script_types"] = _script_types(base)
     root_ids = set(base["roots"])
-    base["root_objects"] = [
-        item for item in base["objects"] if item["file_id"] in root_ids
-    ]
+    base["root_objects"] = [item for item in base["objects"] if item["file_id"] in root_ids]
     base["event_bindings"] = base["unity_events"]
     base["confidence"] = _asset_confidence(base)
     _emit_edges(base, analysis)
@@ -536,6 +590,9 @@ def _editor_references(
     guid_to_assets: dict[str, list[str]],
 ) -> list[dict[str, Any]]:
     references: list[dict[str, Any]] = []
+    by_path = getattr(guid_to_assets, "by_path", None)
+    if by_path is None:
+        by_path = {path: guid for guid, paths in guid_to_assets.items() for path in paths}
     for index, raw_target in enumerate(editor_asset.get("dependencies", []), start=1):
         target = _normalize(str(raw_target))
         if (
@@ -545,11 +602,7 @@ def _editor_references(
             or target.startswith(("Library/", "Temp/", "obj/", ".better-context/"))
         ):
             continue
-        target_guid = ""
-        for guid, paths in guid_to_assets.items():
-            if target in paths:
-                target_guid = guid
-                break
+        target_guid = by_path.get(target, "")
         references.append(
             {
                 "document_file_id": "0",
@@ -561,6 +614,30 @@ def _editor_references(
                 "confidence": "exact",
                 "reason": "asset_database_direct_dependency",
                 "edge_kind": "asset_database_direct",
+                "provenance": "unity-editor",
+            }
+        )
+    for item in editor_asset.get("references", []):
+        if not isinstance(item, dict):
+            continue
+        target = _normalize(str(item.get("target", "")))
+        if (
+            not target.startswith(("Assets/", "Packages/"))
+            or target == source
+            or target.endswith(".meta")
+        ):
+            continue
+        references.append(
+            {
+                "document_file_id": "0",
+                "file_id": str(item.get("local_id", "0")),
+                "guid": str(item.get("guid", "")),
+                "field": str(item.get("field", "")),
+                "line": 0,
+                "target": target,
+                "confidence": "exact",
+                "reason": "serialized_object_reference",
+                "edge_kind": "editor_serialized_reference",
                 "provenance": "unity-editor",
             }
         )
@@ -628,9 +705,7 @@ def _analyze_editor_asset(
         "confidence": "exact",
     }
     base["references"] = _editor_references(base["path"], editor_asset, guid_to_assets)
-    subassets = [
-        item for item in editor_asset.get("subassets", []) if isinstance(item, dict)
-    ]
+    subassets = [item for item in editor_asset.get("subassets", []) if isinstance(item, dict)]
     base["subasset_count"] = len(subassets)
     base["non_default_importer"] = _editor_has_non_default_importer(editor_asset)
     _emit_edges(base, analysis)
@@ -717,9 +792,7 @@ def _collect_serialized_asset_semantics(
     """Record compact facts only for asset formats with a known Unity schema."""
     suffix = PurePosixPath(asset["path"]).suffix.lower()
     if suffix == ".anim":
-        document = next(
-            (item for item in documents if item.type_name == "AnimationClip"), None
-        )
+        document = next((item for item in documents if item.type_name == "AnimationClip"), None)
         if document is None:
             return
         curve_sections = (
@@ -730,11 +803,7 @@ def _collect_serialized_asset_semantics(
             "m_PPtrCurves",
             "m_EditorCurves",
         )
-        curve_maps = [
-            item
-            for section in curve_sections
-            for item in _list_maps(document, section)
-        ]
+        curve_maps = [item for section in curve_sections for item in _list_maps(document, section)]
         event_maps = _list_maps(document, "m_Events")
         asset["kind"] = "animation_clip"
         asset["animation_clip"] = {
@@ -742,21 +811,13 @@ def _collect_serialized_asset_semantics(
             "sample_rate": _as_number(_scalar(document, "m_SampleRate")),
             "legacy": _as_bool(_scalar(document, "m_Legacy"), False),
             "wrap_mode": _as_int(_scalar(document, "m_WrapMode"), 0),
-            "curve_count": sum(
-                _list_item_count(document, section) for section in curve_sections
-            ),
-            "binding_paths": sorted(
-                {item["path"] for item in curve_maps if item.get("path")}
-            ),
+            "curve_count": sum(_list_item_count(document, section) for section in curve_sections),
+            "binding_paths": sorted({item["path"] for item in curve_maps if item.get("path")}),
             "properties": sorted(
                 {item["attribute"] for item in curve_maps if item.get("attribute")}
             ),
             "events": sorted(
-                {
-                    item["functionName"]
-                    for item in event_maps
-                    if item.get("functionName")
-                }
+                {item["functionName"] for item in event_maps if item.get("functionName")}
             ),
         }
         return
@@ -766,27 +827,32 @@ def _collect_serialized_asset_semantics(
         if document is None:
             return
         shader: dict[str, Any] = next(
-            (
-                item
-                for item in asset.get("references", [])
-                if item.get("field") == "m_Shader"
-            ),
+            (item for item in asset.get("references", []) if item.get("field") == "m_Shader"),
             {},
         )
         texture_refs = [
-            item
-            for item in asset.get("references", [])
-            if item.get("field") == "m_Texture"
+            item for item in asset.get("references", []) if item.get("field") == "m_Texture"
         ]
         asset["kind"] = "material"
         asset["material"] = {
             "name": _scalar(document, "m_Name") or PurePosixPath(asset["path"]).stem,
             "shader": shader.get("target", ""),
             "shader_guid": shader.get("guid", ""),
-            "textures": sorted(
-                {item["target"] for item in texture_refs if item.get("target")}
-            ),
+            "textures": sorted({item["target"] for item in texture_refs if item.get("target")}),
             "texture_reference_count": len(texture_refs),
+            "render_queue": _as_int(_scalar(document, "m_CustomRenderQueue"), -1),
+            "enable_instancing": _as_bool(_scalar(document, "m_EnableInstancingVariants"), False),
+            "double_sided_gi": _as_bool(_scalar(document, "m_DoubleSidedGI"), False),
+            "floats": {
+                key: _as_number(value)
+                for item in _list_maps(document, "m_Floats")
+                for key, value in item.items()
+            },
+            "colors": {
+                key: value
+                for item in _list_maps(document, "m_Colors")
+                for key, value in item.items()
+            },
         }
         return
 
@@ -947,9 +1013,7 @@ def _resolve_components(
     # Some malformed or stripped YAML omits GameObject.m_Component; retain exact
     # m_GameObject ownership without inventing hierarchy.
     attached = {
-        component["file_id"]
-        for item in asset["objects"]
-        for component in item["components"]
+        component["file_id"] for item in asset["objects"] for component in item["components"]
     }
     for document in documents:
         if document.file_id in attached or document.type_name == "GameObject":
@@ -1056,11 +1120,7 @@ def _selected_component_fields(
             continue
         name = match.group("key")
         value = match.group("value").strip()
-        if (
-            name in _GENERIC_COMPONENT_SKIP_FIELDS
-            or not value
-            or _inline_reference(value)
-        ):
+        if name in _GENERIC_COMPONENT_SKIP_FIELDS or not value or _inline_reference(value):
             continue
         result[name] = _typed_scalar(
             value,
@@ -1545,11 +1605,7 @@ def _emit_edges(asset: dict[str, Any], analysis: UnityRuntimeAnalysis) -> None:
         )
     for event in asset.get("unity_events", []):
         target = event.get("target_script", "")
-        if (
-            event.get("confidence") != "exact"
-            or event.get("call_state", 0) == 0
-            or not target
-        ):
+        if event.get("confidence") != "exact" or event.get("call_state", 0) == 0 or not target:
             continue
         analysis.edge_details.append(
             {
@@ -2162,6 +2218,13 @@ def _build_summary(
             "texture": "textures",
             "sprite_atlas": "sprite_atlases",
             "shader": "shaders",
+            "shader_include": "shader_includes",
+            "compute_shader": "compute_shaders",
+            "raytracing_shader": "raytracing_shaders",
+            "ui_document": "ui_documents",
+            "style_sheet": "style_sheets",
+            "input_actions": "input_action_assets",
+            "visual_effect": "visual_effects",
             "cubemap": "cubemaps",
             "render_texture": "render_textures",
             "audio_clip": "audio_clips",
@@ -2238,9 +2301,7 @@ def _build_summary(
                 "responsibility": asset.get("responsibility", ""),
                 "model_node_count": asset.get("model", {}).get("node_count", 0),
                 "model_mesh_count": asset.get("model", {}).get("mesh_count", 0),
-                "model_bone_count": asset.get("model", {}).get("skeleton", {}).get(
-                    "bone_count", 0
-                ),
+                "model_bone_count": asset.get("model", {}).get("skeleton", {}).get("bone_count", 0),
                 "embedded_clip_count": len(asset.get("model_importer", {}).get("clips", [])),
                 "subasset_count": len(editor_asset.get("subassets", [])),
                 "non_default_importer": bool(asset.get("non_default_importer")),
@@ -2357,9 +2418,7 @@ def _asset_confidence(asset: dict[str, Any]) -> str:
         item.get("source_prefab", {}).get("confidence", "exact")
         for item in asset.get("prefab_instances", [])
     )
-    confidences.extend(
-        str(item.get("confidence", "exact")) for item in asset.get("references", [])
-    )
+    confidences.extend(str(item.get("confidence", "exact")) for item in asset.get("references", []))
     animator = asset.get("animator", {})
     for state in animator.get("states", []):
         if state.get("motion"):
@@ -2428,9 +2487,7 @@ def _responsibility(asset: dict[str, Any]) -> str:
         editor = asset.get("editor_asset", {})
         facts = editor.get("facts", {})
         subassets = editor.get("subassets", [])
-        source_dimensions = (
-            f"{facts.get('source_width', '?')}×{facts.get('source_height', '?')}"
-        )
+        source_dimensions = f"{facts.get('source_width', '?')}×{facts.get('source_height', '?')}"
         imported_dimensions = f"{facts.get('width', '?')}×{facts.get('height', '?')}"
         if subassets:
             names = [str(item.get("name", "")) for item in subassets[:4]]
@@ -2493,10 +2550,7 @@ def _responsibility(asset: dict[str, Any]) -> str:
 
 def _high_signal(asset: dict[str, Any]) -> int:
     animator = asset.get("animator", {})
-    semantic_art = any(
-        asset.get(key)
-        for key in ("animation_clip", "material", "mesh", "model")
-    )
+    semantic_art = any(asset.get(key) for key in ("animation_clip", "material", "mesh", "model"))
     editor_asset = asset.get("editor_asset", {})
     subasset_count = len(editor_asset.get("subassets", []))
     editor_signal = (
@@ -2522,6 +2576,8 @@ def _high_signal(asset: dict[str, Any]) -> int:
 
 def _kind_for_path(path: str) -> str:
     suffix = PurePosixPath(path).suffix.lower()
+    if suffix in SOURCE_KINDS:
+        return SOURCE_KINDS[suffix]
     return {
         ".unity": "scene",
         ".prefab": "prefab",

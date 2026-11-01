@@ -59,6 +59,7 @@ DEFAULT_IGNORES: List[str] = [
     '.codegraph/',
     '.cocoindex_code/',
     '.custom-repo/',
+    '.temp/',
     
     # IDE/Editor
     '.idea/',

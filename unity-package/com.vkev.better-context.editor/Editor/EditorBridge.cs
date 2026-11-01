@@ -13,7 +13,7 @@ namespace VKev.BetterContext
     [InitializeOnLoad]
     public static class EditorBridge
     {
-        public const string BridgeVersion = "1.6.0";
+        public const string BridgeVersion = "1.9.0";
         public const string SnapshotSchema = "1.0.0";
 
         private static readonly string ProjectRoot =
@@ -107,12 +107,20 @@ namespace VKev.BetterContext
                 status = "ok",
             };
 
-            ExportScripts(snapshot);
-            string[] paths = AssetDatabase.GetAllAssetPaths()
+            string[] allPaths = AssetDatabase.GetAllAssetPaths();
+            string[] authoredPaths = allPaths.Where(path => path.StartsWith("Assets/", StringComparison.Ordinal)
+                && !AssetDatabase.IsValidFolder(path)).ToArray();
+            // One batched dependency query instead of loading every installed
+            // package asset and MonoScript. Include only packages actually used.
+            HashSet<string> relevant = new HashSet<string>(
+                AssetDatabase.GetDependencies(authoredPaths, true), StringComparer.Ordinal);
+            string[] paths = allPaths
                 .Where(path => path.StartsWith("Assets/", StringComparison.Ordinal)
-                    || path.StartsWith("Packages/", StringComparison.Ordinal))
+                    || (path.StartsWith("Packages/", StringComparison.Ordinal)
+                        && (request.include_packages || relevant.Contains(path))))
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToArray();
+            ExportScripts(snapshot, relevant, request.include_packages);
             snapshot.coverage.assets_scanned = paths.Length;
             foreach (string path in paths)
             {
@@ -136,11 +144,13 @@ namespace VKev.BetterContext
             return snapshot;
         }
 
-        private static void ExportScripts(EditorSnapshot snapshot)
+        private static void ExportScripts(EditorSnapshot snapshot, HashSet<string> relevant, bool includePackages)
         {
             foreach (string guid in AssetDatabase.FindAssets("t:MonoScript").OrderBy(value => value))
             {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!includePackages && !path.StartsWith("Assets/", StringComparison.Ordinal)
+                    && !relevant.Contains(path)) continue;
                 MonoScript script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
                 if (script == null)
                 {
@@ -164,6 +174,11 @@ namespace VKev.BetterContext
 
         private static AssetFact ExportAsset(string path)
         {
+            if (AssetDatabase.IsValidFolder(path) || path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(path) == "AGENTS.md" || Path.GetFileName(path) == "CLAUDE.md")
+            {
+                return null; // MonoScript identities are exported separately.
+            }
             AssetImporter importer = AssetImporter.GetAtPath(path);
             UnityEngine.Object main = AssetDatabase.LoadMainAssetAtPath(path);
             string kind = AssetKind(path, importer, main);
@@ -202,6 +217,9 @@ namespace VKev.BetterContext
             {
                 ExportSpriteAtlas(asset, main);
             }
+            ExportShaderAndMaterial(asset, main);
+            ExportSerializedFacts(asset, main);
+            ExportSubassetIdentities(asset, path);
             return asset;
         }
 
@@ -237,9 +255,138 @@ namespace VKev.BetterContext
             if (typeName.Contains("TimelineAsset", StringComparison.Ordinal)) return "timeline";
             if (typeName == "UnityEngine.LightingSettings") return "lighting_settings";
             if (typeName.Contains("NavMeshData", StringComparison.Ordinal)) return "navmesh_data";
+            if (importer is ModelImporter) return "model";
+            if (main is Material) return "material";
+            if (main is GameObject) return "prefab";
+            if (main is Mesh) return "mesh";
+            if (main is AnimationClip) return "animation_clip";
+            if (typeName.Contains("VisualTreeAsset", StringComparison.Ordinal)) return "ui_document";
+            if (typeName.Contains("StyleSheet", StringComparison.Ordinal)) return "style_sheet";
+            if (main is ComputeShader) return "compute_shader";
+            if (typeName.Contains("VisualEffectAsset", StringComparison.Ordinal)) return "visual_effect";
             string extension = Path.GetExtension(path).ToLowerInvariant();
             if (extension == ".shadergraph" || extension == ".shadersubgraph") return "shader";
-            return string.Empty;
+            if (extension == ".unity") return "scene";
+            if (extension == ".uxml") return "ui_document";
+            if (extension == ".uss" || extension == ".tss") return "style_sheet";
+            // A ScriptedImporter or future Unity/package asset is still an asset.
+            // Inventory and direct dependencies remain useful without a known schema.
+            return main != null || importer != null ? "asset" : string.Empty;
+        }
+
+        private static void ExportShaderAndMaterial(AssetFact asset, UnityEngine.Object main)
+        {
+            Shader shader = main as Shader;
+            Material material = main as Material;
+            if (material != null)
+            {
+                shader = material.shader;
+                Add(asset, "render_queue", material.renderQueue);
+                Add(asset, "enable_instancing", material.enableInstancing);
+                Add(asset, "double_sided_gi", material.doubleSidedGI);
+                Add(asset, "shader_keywords", string.Join(", ", material.shaderKeywords));
+                Add(asset, "shader", shader != null ? shader.name : string.Empty);
+            }
+            if (shader == null) return;
+            int count = shader.GetPropertyCount();
+            Add(asset, "shader_property_count", count);
+            Add(asset, "shader_properties_truncated", count > 64);
+            for (int index = 0; index < Math.Min(count, 64); index++)
+            {
+                string name = shader.GetPropertyName(index);
+                string type = shader.GetPropertyType(index).ToString();
+                Add(asset, "property." + name + ".type", type);
+                if (material == null || !material.HasProperty(name)) continue;
+                switch (type)
+                {
+                    case "Color": Add(asset, "property." + name, material.GetColor(name)); break;
+                    case "Vector": Add(asset, "property." + name, material.GetVector(name)); break;
+                    case "Float":
+                    case "Range": Add(asset, "property." + name, material.GetFloat(name)); break;
+                    case "Int": Add(asset, "property." + name, material.GetInteger(name)); break;
+                    case "Texture":
+                        Add(asset, "property." + name, AssetDatabase.GetAssetPath(material.GetTexture(name)));
+                        Add(asset, "property." + name + ".scale", material.GetTextureScale(name));
+                        Add(asset, "property." + name + ".offset", material.GetTextureOffset(name));
+                        break;
+                }
+            }
+        }
+
+        private static void ExportSerializedFacts(AssetFact asset, UnityEngine.Object main)
+        {
+            if (main == null || main is GameObject) return; // Never open scenes/prefabs.
+            try
+            {
+                SerializedObject serialized = new SerializedObject(main);
+                SerializedProperty property = serialized.GetIterator();
+                int visited = 0;
+                int facts = 0;
+                // Bounded metadata only: no pixel, mesh, terrain or audio buffers.
+                while (visited < 512 && property.NextVisible(true))
+                {
+                    visited++;
+                    if (property.propertyType == SerializedPropertyType.ObjectReference)
+                    {
+                        UnityEngine.Object target = property.objectReferenceValue;
+                        if (target == null) continue;
+                        if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(target, out string guid, out long id))
+                            continue;
+                        string targetPath = AssetDatabase.GetAssetPath(target);
+                        if (string.IsNullOrEmpty(targetPath) || targetPath == asset.path) continue;
+                        asset.references.Add(new ObjectReferenceFact
+                        {
+                            field = property.propertyPath, target = targetPath,
+                            guid = guid, local_id = id,
+                        });
+                    }
+                    else if (facts < 24 && property.depth <= 2)
+                    {
+                        string value = null;
+                        switch (property.propertyType)
+                        {
+                            case SerializedPropertyType.Boolean: value = property.boolValue.ToString(); break;
+                            case SerializedPropertyType.Integer: value = property.longValue.ToString(CultureInfo.InvariantCulture); break;
+                            case SerializedPropertyType.Float: value = property.doubleValue.ToString(CultureInfo.InvariantCulture); break;
+                            case SerializedPropertyType.Enum: value = property.enumValueIndex.ToString(CultureInfo.InvariantCulture); break;
+                            case SerializedPropertyType.Color: value = property.colorValue.ToString(); break;
+                            case SerializedPropertyType.Vector2: value = property.vector2Value.ToString(); break;
+                            case SerializedPropertyType.Vector3: value = property.vector3Value.ToString(); break;
+                            case SerializedPropertyType.String:
+                                value = property.stringValue;
+                                if (value.Length > 240) value = value.Substring(0, 240) + "…";
+                                break;
+                        }
+                        if (value == null) continue;
+                        Add(asset, "serialized." + property.propertyPath, value);
+                        facts++;
+                    }
+                }
+                Add(asset, "serialized_properties_truncated", visited >= 512);
+            }
+            catch (Exception exception)
+            {
+                // Some importers do not expose a SerializedObject surface.
+                Add(asset, "serialized_inspection_error", exception.GetType().Name);
+            }
+        }
+
+        private static void ExportSubassetIdentities(AssetFact asset, string path)
+        {
+            if (path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)) return;
+            UnityEngine.Object[] objects = AssetDatabase.LoadAllAssetsAtPath(path);
+            Add(asset, "subasset_inventory_truncated", objects.Length > 256);
+            foreach (UnityEngine.Object item in objects.Take(256))
+            {
+                if (item == null || !AssetDatabase.TryGetGUIDAndLocalFileIdentifier(item, out string _, out long id))
+                    continue;
+                if (asset.subassets.Any(existing => existing.local_id == id)) continue;
+                asset.subassets.Add(new SubassetFact
+                {
+                    name = item.name, type_name = item.GetType().FullName, local_id = id,
+                });
+            }
         }
 
         private static void ExportTexture(AssetFact asset, TextureImporter importer, Texture texture)
@@ -574,6 +721,7 @@ namespace VKev.BetterContext
         [Serializable]
         private sealed class Request
         {
+            public bool include_packages;
             public string schema_version;
             public string bridge_version;
             public string project_root;
@@ -624,6 +772,16 @@ namespace VKev.BetterContext
             public List<string> dependencies = new List<string>();
             public List<NamedFact> facts = new List<NamedFact>();
             public List<SubassetFact> subassets = new List<SubassetFact>();
+            public List<ObjectReferenceFact> references = new List<ObjectReferenceFact>();
+        }
+
+        [Serializable]
+        private sealed class ObjectReferenceFact
+        {
+            public string field;
+            public string target;
+            public string guid;
+            public long local_id;
         }
 
         [Serializable]

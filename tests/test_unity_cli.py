@@ -112,6 +112,25 @@ def test_unity_nested_commands_parse() -> None:
     assert binding_args.method == "SwitchGun"
 
 
+def test_cached_queries_do_not_rescan_or_refresh_after_edits(
+    unity_runtime_project: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    target = unity_runtime_project / "Assets/UI/GunButton.prefab"
+    target.write_text(target.read_text() + "  m_Changed: 1\n")
+    manifest = unity_runtime_project / ".better-context/manifest.json"
+    before = manifest.read_bytes()
+
+    def unexpected_scan(*args, **kwargs):
+        raise AssertionError("A cached read must not rescan the project.")
+
+    monkeypatch.setattr("better_context.cli.collect_current_hashes", unexpected_scan)
+    assert main(["--root", str(unity_runtime_project), "unity", "list", "--cached"]) == 0
+    output = capsys.readouterr()
+    assert "GunButton.prefab" in output.out
+    assert "may be stale" in output.err
+    assert manifest.read_bytes() == before
+
+
 def test_unity_show_depth_trims_fbx_hierarchy() -> None:
     runtime = {
         "path": "Assets/Hero.fbx",

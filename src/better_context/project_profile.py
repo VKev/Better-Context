@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from .project_kind import COCOS_KIND, REPOSITORY_KIND, UNITY_KIND, ProjectKind
+from .unity_sources import EXTRA_ASSET_SUFFIXES
 
 # Media and serialized-asset suffixes shared by every engine.
 _COMMON_MEDIA_SUFFIXES = frozenset(
@@ -46,7 +47,7 @@ _COMMON_MEDIA_SUFFIXES = frozenset(
     }
 )
 
-_UNITY_RUNTIME_SUFFIXES = _COMMON_MEDIA_SUFFIXES | {
+_UNITY_RUNTIME_SUFFIXES = _COMMON_MEDIA_SUFFIXES | EXTRA_ASSET_SUFFIXES | {
     ".anim",
     ".asset",
     ".controller",
@@ -220,6 +221,10 @@ UNITY_PROFILE = ProjectKindProfile(
         "at repository root.",
     ),
     testing_rules=(
+        "- Use Unity CLI for live Editor state, authoring and validation. Context maps "
+        "and code graphs assist file/symbol discovery; they are not live Unity state.",
+        "- Reuse saved context while reading/editing. Refresh maps and code indexes once "
+        "after the whole edit/test batch, never after each file.",
         "- Validate C# changes by compiling in Unity `{version}`; run relevant "
         "EditMode/PlayMode tests in Unity Test Runner.",
         "- For CLI automation, use Unity `-batchmode -runTests` with the intended "

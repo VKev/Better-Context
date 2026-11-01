@@ -193,6 +193,8 @@ def _collect_directories(
         runtime_signal = engine and _has_unity_runtime_signal(entry, manifest, profile)
         semantic_signal = source_signal or runtime_signal
         asset_path = _logical_unity_asset_path(entry.path, profile) if engine else ""
+        if profile.kind == UNITY_KIND and not asset_path and _unity_runtime(entry):
+            asset_path = entry.path
         if (
             asset_path
             and entry.path.endswith(".meta")
@@ -381,7 +383,7 @@ def _detail_has_unity_runtime_signal(
     manifest: Manifest,
     profile: ProjectKindProfile = UNITY_PROFILE,
 ) -> bool:
-    if not profile.runtime_suffix(PurePosixPath(entry.path).suffix):
+    if not profile.runtime_suffix(PurePosixPath(entry.path).suffix) and not detail:
         return False
     if not detail or not _runtime_scope_allows(entry, detail, manifest):
         return False
@@ -389,6 +391,8 @@ def _detail_has_unity_runtime_signal(
         return False
 
     kind = str(detail.get("kind", ""))
+    if detail.get("source_asset"):
+        return True
     if entry.path in _build_scene_paths(manifest):
         return True
     if _runtime_script_names(detail) or _runtime_event_names(detail):
@@ -821,6 +825,8 @@ def _unity_asset_path_records(
     logical_paths: dict[str, FileEntry] = {}
     for entry in manifest.files:
         logical = _logical_unity_asset_path(entry.path, profile)
+        if profile.kind == UNITY_KIND and not logical and _unity_runtime(entry):
+            logical = entry.path
         if not logical:
             continue
         if (
@@ -1004,6 +1010,10 @@ def _root_unity_runtime(
                 f"{metrics.get('sprites', 0)} Sprite subassets",
                 f"{metrics.get('sprite_atlases', 0)} Sprite Atlases",
                 f"{metrics.get('shaders', 0)} shaders",
+                f"{metrics.get('shader_includes', 0)} shader includes",
+                f"{metrics.get('compute_shaders', 0)} compute shaders",
+                f"{metrics.get('ui_documents', 0)} UI documents",
+                f"{metrics.get('style_sheets', 0)} style sheets",
                 f"{metrics.get('audio_clips', 0)} audio clips",
                 f"{metrics.get('video_clips', 0)} video clips",
                 f"{metrics.get('game_objects', 0)} GameObjects",

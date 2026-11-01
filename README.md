@@ -40,7 +40,7 @@ edges instead of guessing from names.
 From this checkout:
 
 ```powershell
-uv run better-context-unity --root D:\Path\To\UnityProject editor install --revision v1.6.0
+uv run better-context-unity --root D:\Path\To\UnityProject editor install --revision v1.9.0
 uv run better-context-unity --root D:\Path\To\UnityProject editor sync --mode auto
 uv run better-context-unity --root D:\Path\To\UnityProject agents --dry-run
 uv run better-context-unity --root D:\Path\To\UnityProject agents
@@ -284,6 +284,62 @@ shape follows Unity's documented [`ModelImporter`](https://docs.unity3d.com/Scri
 surface and Autodesk's documented [FBX scene graph](https://help.autodesk.com/cloudhelp/2018/ENU/FBX-Developer-Help/nodes_and_scene_graph/fbx_scenes.html).
 
 ## Commands
+
+### Asset coverage and performance (1.9)
+
+Every non-ignored imported file with a Unity metadata sidecar is retained in the
+asset inventory, including custom extensions and extensionless assets. This is
+inventory coverage, not a promise to decode every proprietary payload.
+
+| Asset family | Offline inspection | Additional Editor facts |
+|---|---|---|
+| ShaderLab, HLSL/CG includes, Compute, ray tracing | Declared names/properties, kernels, explicit include paths | Imported shader interface and property types |
+| Shader Graph / Sub Graph | Multi-object JSON, property names, texture PPtrs, subgraph GUIDs | Imported asset identity and direct dependencies |
+| UI Toolkit UXML / USS / TSS | Element names/classes, templates, stylesheet imports, resource URLs | Imported types and dependency identities |
+| uGUI scenes / prefabs | Existing GameObject/component hierarchy, UnityEvents, GUID references | Component class identity |
+| Materials | Shader/texture references, render queue, instancing, saved floats/colors | Current property values, shader keywords, texture transforms |
+| Input Actions / assembly definitions | Action maps/actions/binding counts, assembly GUID references | Imported identity |
+| Textures, sprites, models, animation, audio, video, fonts, terrain | Existing structural parsers where available, otherwise bounded inventory | Importer facts, subasset names/types/local IDs |
+| Custom ScriptedImporter / future package assets | Inventory and recognizable Unity YAML | Type, direct dependencies and bounded serialized fields/object references |
+
+Unknown binary formats remain explicitly inventory-only without Editor facts.
+Malformed source assets are reported as errors. Offline shader facts describe
+structure, not successful compilation or rendering. Conditional shader includes,
+package search paths, runtime-only loads and custom UI binding behavior still need
+Unity validation. Reference evidence never comes from matching arbitrary names,
+comments or GUID-shaped strings.
+
+Source parsing has a 16 MiB budget. Editor exports cap generic serialized traversal
+at 512 properties, scalar previews at 24 fields, shader previews at 64 properties
+and generic subasset identity previews at 256 objects, with truncation indicators.
+No texture pixels, audio buffers or mesh/terrain arrays are embedded in maps.
+By default the Editor scans authored assets plus their actual package dependencies,
+not every installed package asset. Set asset scope to all for the broader export.
+Forward/reverse GUID tables are shared across the analysis instead of reconstructed
+for every dependency. Source hashes include tail edits; imported binaries use a
+sample plus size/mtime for cheap invalidation.
+
+### Work in batches
+
+Use Unity CLI to inspect and interact with the live Editor. Better Context and
+CodeGraph support orientation and source discovery; neither replaces live Unity
+state or the source files currently being edited.
+
+During an edit batch, read the existing maps and manifest. For fast saved-snapshot
+queries that do not rescan the project, opt in explicitly:
+
+~~~powershell
+better-context-unity unity show Assets/UI/Panel.uxml --cached
+better-context-unity unity list --kind material --cached
+~~~
+
+Cached reads warn on stderr that freshness has not been checked. They never
+regenerate maps or invoke the Editor. Verify touched files directly until the end
+of the batch. After all edits and tests, run agents once, then refresh CodeGraph
+once if it is used. Do not run either operation after each file. Configure the
+CodeGraph MCP server with --no-watch if per-file background indexing is unwanted.
+Ordinary read-only tasks need no refresh. The default query mode still rejects
+stale manifests instead of silently treating them as current.
 
 | Command | Purpose |
 |---|---|

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-EDITOR_BRIDGE_VERSION = "1.6.0"
+EDITOR_BRIDGE_VERSION = "1.9.0"
 EDITOR_SNAPSHOT_SCHEMA = "1.0.0"
 EDITOR_PACKAGE_NAME = "com.vkev.better-context.editor"
 EDITOR_PACKAGE_PATH = "unity-package/com.vkev.better-context.editor"
@@ -143,13 +143,15 @@ def compute_editor_source_hash(root: Path) -> str:
     root = root.resolve()
     digest = hashlib.sha256()
     candidates: list[Path] = []
-    assets = root / "Assets"
-    if assets.is_dir():
-        for path in assets.rglob("*"):
+    for asset_root in (root / "Assets", root / "Packages"):
+        if not asset_root.is_dir():
+            continue
+        for path in asset_root.rglob("*"):
             if not path.is_file():
                 continue
-            suffix = path.suffix.lower()
-            if suffix in _RELEVANT_SUFFIXES or path.name.endswith(".meta"):
+            # Every authored/imported asset can affect the Editor snapshot,
+            # including custom ScriptedImporter formats and UI/shader sources.
+            if path.name not in {"AGENTS.md", "CLAUDE.md", "AGENTS.md.meta", "CLAUDE.md.meta"}:
                 candidates.append(path)
     for relative in (
         "Packages/manifest.json",
@@ -333,12 +335,16 @@ def discover_unity_editor(root: Path, configured_path: str | None = None) -> Pat
 
 def _write_request(root: Path, output_dir: str, mode: str) -> dict[str, Any]:
     nonce = uuid.uuid4().hex
+    settings = _read_json(root / ".ctx.json") or {}
     request = {
         "schema_version": EDITOR_SNAPSHOT_SCHEMA,
         "bridge_version": EDITOR_BRIDGE_VERSION,
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "project_root": root.resolve().as_posix(),
         "mode": mode,
+        "include_packages": "all" in (
+            settings.get("unity_asset_scope"), settings.get("asset_scope")
+        ),
         "nonce": nonce,
         "source_hash": compute_editor_source_hash(root),
         "package_lock_hash": compute_package_lock_hash(root),
@@ -508,7 +514,7 @@ def sync_editor_snapshot(
     )
 
 
-def install_editor_package(root: Path, revision: str = "v1.6.0") -> tuple[bool, str]:
+def install_editor_package(root: Path, revision: str = "v1.9.0") -> tuple[bool, str]:
     """Pin the companion UPM package in Packages/manifest.json."""
     manifest_path = root / "Packages" / "manifest.json"
     try:
@@ -579,9 +585,7 @@ def normalize_editor_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         assets.append(asset)
     normalized["assets"] = assets
     normalized["assets_by_path"] = {
-        str(item.get("path", "")).replace("\\", "/"): item
-        for item in assets
-        if item.get("path")
+        str(item.get("path", "")).replace("\\", "/"): item for item in assets if item.get("path")
     }
     scripts = [item for item in snapshot.get("scripts", []) if isinstance(item, dict)]
     normalized["scripts"] = scripts

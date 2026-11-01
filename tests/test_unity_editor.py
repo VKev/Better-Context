@@ -124,7 +124,7 @@ def test_editor_commands_and_component_query_parse() -> None:
         "abc",
     )
     assert sync.mode == "batch"
-    assert default_install.revision == "v1.6.0"
+    assert default_install.revision == "v1.9.0"
     assert components.unity_command == "components"
     assert components.type == "Image"
 

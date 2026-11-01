@@ -241,8 +241,8 @@ Agent Workflow:
     )
     editor_install_parser.add_argument(
         "--revision",
-        default="v1.6.0",
-        help="Immutable Git commit or release tag to pin (default: v1.6.0)",
+        default="v1.9.0",
+        help="Immutable Git commit or release tag to pin (default: v1.9.0)",
     )
     editor_status_parser = editor_subparsers.add_parser(
         "status",
@@ -313,6 +313,13 @@ Agent Workflow:
     unity_components_parser.add_argument(
         "--format", choices=["json", "human", "markdown"], default="json"
     )
+    for query_parser in (
+        unity_list_parser, unity_show_parser, unity_bindings_parser, unity_components_parser
+    ):
+        query_parser.add_argument(
+            "--cached", action="store_true",
+            help="Read the saved snapshot without a project rescan; verify edited files directly",
+        )
 
     cocos_parser = subparsers.add_parser(
         "cocos",
@@ -624,17 +631,27 @@ def _load_fresh_unity_manifest(args: argparse.Namespace) -> Optional[Manifest]:
         print("[hint] Run 'better-context-unity agents' with the current configuration.")
         return None
 
-    try:
-        current_hash = compute_source_hash(
-            collect_current_hashes(root, getattr(args, "config", None))
+    if getattr(args, "cached", False):
+        print(
+            "[cached] Reading saved context without rescanning. It may be stale; "
+            "verify edited files directly and refresh once after the edit/test batch.",
+            file=sys.stderr,
         )
-    except Exception as exc:
-        print(f"[error] Failed to verify manifest freshness: {exc}")
-        return None
-    if current_hash != staleness_info.source_hash:
-        print("[error] Unity runtime manifest is stale; project files changed after analysis.")
-        print("[hint] Run 'better-context-unity agents' to refresh it.")
-        return None
+    else:
+        try:
+            current_hash = compute_source_hash(
+                collect_current_hashes(root, getattr(args, "config", None))
+            )
+        except Exception as exc:
+            print(f"[error] Failed to verify manifest freshness: {exc}")
+            return None
+        if current_hash != staleness_info.source_hash:
+            print("[error] Unity runtime manifest is stale; project files changed after analysis.")
+            print(
+                "[hint] Run 'better-context-unity agents' once after the edit/test batch, "
+                "or use --cached for orientation."
+            )
+            return None
 
     has_runtime = isinstance(manifest.project.get("unity_runtime"), dict) or isinstance(
         manifest.project.get("engine_runtime"), dict
