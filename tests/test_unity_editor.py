@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,64 @@ from better_context.unity_editor import (
     normalize_editor_snapshot,
 )
 from better_context.unity_runtime import analyze_unity_runtime
+
+
+def test_live_editor_process_probe_uses_non_destructive_windows_query(monkeypatch) -> None:
+    from better_context.unity_editor import _process_running
+    if os.name == "nt":
+        def forbidden_kill(*args):
+            raise AssertionError("Windows process discovery must never call os.kill")
+        monkeypatch.setattr(os, "kill", forbidden_kill)
+    assert _process_running(os.getpid()) is True
+    assert _process_running(0) is False
+
+
+def test_windows_process_probe_closes_handle_and_observes_exit_state(monkeypatch) -> None:
+    import ctypes
+
+    from better_context.unity_editor import _windows_process_running
+
+    closed = []
+    status = [259]
+
+    def open_process(access, inherit, pid):
+        assert access == 0x1000
+        assert not inherit
+        assert pid == 42
+        return 123
+
+    def exit_code(handle, pointer):
+        assert handle == 123
+        pointer._obj.value = status[0]
+        return True
+
+    def close_handle(handle):
+        closed.append(handle)
+        return True
+
+    kernel = SimpleNamespace(OpenProcess=open_process, GetExitCodeProcess=exit_code,
+                             CloseHandle=close_handle)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: kernel, raising=False)
+    assert _windows_process_running(42) is True
+    status[0] = 0
+    assert _windows_process_running(42) is False
+    assert closed == [123, 123]
+
+
+def test_windows_access_denied_is_not_treated_as_closed_editor(monkeypatch) -> None:
+    import ctypes
+
+    from better_context.unity_editor import _windows_process_running
+
+    def no_handle(*args):
+        return None
+    kernel = SimpleNamespace(OpenProcess=no_handle, GetExitCodeProcess=lambda *a: False,
+                             CloseHandle=lambda *a: False)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: kernel, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    assert _windows_process_running(42) is True
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 87, raising=False)
+    assert _windows_process_running(42) is False
 
 
 def _unity_project(root: Path) -> None:
@@ -124,7 +183,7 @@ def test_editor_commands_and_component_query_parse() -> None:
         "abc",
     )
     assert sync.mode == "batch"
-    assert default_install.revision == "v1.9.0"
+    assert default_install.revision == "v1.9.1"
     assert components.unity_command == "components"
     assert components.type == "Image"
 

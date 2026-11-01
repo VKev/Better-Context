@@ -40,7 +40,7 @@ edges instead of guessing from names.
 From this checkout:
 
 ```powershell
-uv run better-context-unity --root D:\Path\To\UnityProject editor install --revision v1.9.0
+uv run better-context-unity --root D:\Path\To\UnityProject editor install --revision v1.9.1
 uv run better-context-unity --root D:\Path\To\UnityProject editor sync --mode auto
 uv run better-context-unity --root D:\Path\To\UnityProject agents --dry-run
 uv run better-context-unity --root D:\Path\To\UnityProject agents
@@ -286,6 +286,10 @@ surface and Autodesk's documented [FBX scene graph](https://help.autodesk.com/cl
 ## Commands
 
 ### Asset coverage and performance (1.9)
+
+Version 1.9.1 fixes live-Editor detection on Windows using a read-only process
+query. Access-denied results conservatively preserve the existing Editor rather
+than attempting a second batch launch. The companion Editor bridge remains 1.9.0.
 
 Every non-ignored imported file with a Unity metadata sidecar is retained in the
 asset inventory, including custom extensions and extensionless assets. This is

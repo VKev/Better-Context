@@ -241,8 +241,8 @@ Agent Workflow:
     )
     editor_install_parser.add_argument(
         "--revision",
-        default="v1.9.0",
-        help="Immutable Git commit or release tag to pin (default: v1.9.0)",
+        default="v1.9.1",
+        help="Immutable Git commit or release tag to pin (default: v1.9.1)",
     )
     editor_status_parser = editor_subparsers.add_parser(
         "status",

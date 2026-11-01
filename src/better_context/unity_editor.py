@@ -254,11 +254,40 @@ def get_editor_snapshot_status(
 def _process_running(process_id: int) -> bool:
     if process_id <= 0:
         return False
+    if os.name == "nt":
+        return _windows_process_running(process_id)
     try:
         os.kill(process_id, 0)
-    except (OSError, PermissionError):
+    except PermissionError:
+        return True
+    except OSError:
         return False
     return True
+
+
+def _windows_process_running(process_id: int) -> bool:
+    """Query a process without the terminate permissions Windows os.kill requests."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, process_id)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        # An inaccessible live Editor must not trigger a conflicting batch launch.
+        return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True  # uncertain: conservatively keep the existing Editor
+        return bool(code.value == 259)  # STILL_ACTIVE
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def is_project_open(root: Path) -> bool:
@@ -514,7 +543,7 @@ def sync_editor_snapshot(
     )
 
 
-def install_editor_package(root: Path, revision: str = "v1.9.0") -> tuple[bool, str]:
+def install_editor_package(root: Path, revision: str = "v1.9.1") -> tuple[bool, str]:
     """Pin the companion UPM package in Packages/manifest.json."""
     manifest_path = root / "Packages" / "manifest.json"
     try:
