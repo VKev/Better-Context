@@ -154,7 +154,9 @@ def test_resolve_map_filenames_rejects_unknown_target() -> None:
 
 
 def test_map_filename_recognition_covers_both_clients() -> None:
-    assert set(MAP_FILENAMES) == {"AGENTS.md", "CLAUDE.md"}
+    assert set(MAP_FILENAMES) == {"AGENTS.md", "CLAUDE.md", "VKEV-AGENTS.md"}
+    assert is_map_path("Assets/Scripts/VKEV-AGENTS.md")
+    assert is_map_meta_filename("VKEV-AGENTS.md.meta")
     assert is_map_filename("CLAUDE.md") and is_map_filename("agents.md")
     assert is_map_path("Assets/Scripts/CLAUDE.md")
     assert not is_map_path("Assets/Scripts/Player.cs")
