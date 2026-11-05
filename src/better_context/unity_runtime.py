@@ -8,8 +8,10 @@ edge retain the exact serialized field that produced it.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -259,6 +261,9 @@ class _Document:
     stripped: bool
     type_name: str
     lines: list[tuple[int, str]]
+    reference_cache: list[tuple[int, str, dict[str, str]]] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 class _GuidIndex(dict[str, list[str]]):
@@ -342,21 +347,15 @@ def analyze_unity_runtime(
             continue
         candidates.append((path, item, ownership))
 
-    for path, item, ownership in sorted(candidates):
-        asset = _analyze_asset(
-            root,
-            path,
-            item,
-            ownership,
-            guid_to_assets,
-            script_symbols,
-            entries_by_path,
-            analysis,
-            editor_assets.get(path),
-            editor_scripts,
-            editor_snapshot or {},
-        )
+    context = _AssetContext(
+        root, guid_to_assets, script_symbols, entries_by_path,
+        editor_assets, editor_scripts, editor_snapshot or {},
+    )
+    for path, asset, partial in _analyze_assets(context, sorted(candidates)):
         analysis.assets[path] = asset
+        analysis.edge_details.extend(partial.edge_details)
+        analysis.call_graph.extend(partial.call_graph)
+        analysis.errors.extend(partial.errors)
 
     analysis.edge_details = _merge_edges(analysis.edge_details)
     analysis.call_graph.sort(
@@ -369,6 +368,68 @@ def analyze_unity_runtime(
     )
     analysis.summary["errors"] = list(analysis.errors)
     return analysis
+
+
+@dataclass
+class _AssetContext:
+    root: Path
+    guid_to_assets: dict[str, list[str]]
+    script_symbols: dict[str, dict[str, Any]]
+    entries_by_path: dict[str, Any]
+    editor_assets: dict[str, Any]
+    editor_scripts: dict[str, dict[str, Any]]
+    editor_snapshot: dict[str, Any]
+
+
+_MIN_ASSETS_FOR_PARALLEL = 64
+_worker_context: _AssetContext | None = None
+
+
+def _worker_count() -> int:
+    configured = os.environ.get("BETTER_CONTEXT_WORKERS", "")
+    if configured.isdigit():
+        return max(1, int(configured))
+    return max(1, (os.cpu_count() or 1) - 1)
+
+
+def _init_asset_worker(context: _AssetContext) -> None:
+    global _worker_context
+    _worker_context = context
+
+
+def _analyze_candidate(
+    context: _AssetContext, candidate: tuple[str, Any, str]
+) -> tuple[str, dict[str, Any], UnityRuntimeAnalysis]:
+    path, item, ownership = candidate
+    partial = UnityRuntimeAnalysis()
+    asset = _analyze_asset(
+        context.root, path, item, ownership,
+        context.guid_to_assets, context.script_symbols, context.entries_by_path,
+        partial, context.editor_assets.get(path),
+        context.editor_scripts, context.editor_snapshot,
+    )
+    return path, asset, partial
+
+
+def _analyze_candidate_in_worker(
+    candidate: tuple[str, Any, str],
+) -> tuple[str, dict[str, Any], UnityRuntimeAnalysis]:
+    assert _worker_context is not None
+    return _analyze_candidate(_worker_context, candidate)
+
+
+def _analyze_assets(
+    context: _AssetContext, candidates: list[tuple[str, Any, str]]
+) -> list[tuple[str, dict[str, Any], UnityRuntimeAnalysis]]:
+    """Analyze assets in candidate order; results match the sequential run exactly."""
+    workers = _worker_count()
+    if workers == 1 or len(candidates) < _MIN_ASSETS_FOR_PARALLEL:
+        return [_analyze_candidate(context, candidate) for candidate in candidates]
+    chunk_size = max(1, len(candidates) // (workers * 8))
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_asset_worker, initargs=(context,)
+    ) as pool:
+        return list(pool.map(_analyze_candidate_in_worker, candidates, chunksize=chunk_size))
 
 
 def _analyze_asset(
@@ -1939,6 +2000,13 @@ def _event_field(lines: list[tuple[int, str]], persistent_index: int) -> str:
 
 
 def _reference_fields(document: _Document) -> list[tuple[int, str, dict[str, str]]]:
+    # Called once per component field lookup; recomputing made large prefabs O(n^2).
+    if document.reference_cache is None:
+        document.reference_cache = _scan_reference_fields(document)
+    return document.reference_cache
+
+
+def _scan_reference_fields(document: _Document) -> list[tuple[int, str, dict[str, str]]]:
     references = []
     for index, (line_number, line) in enumerate(document.lines):
         stripped = line.lstrip()

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import shutil
 from pathlib import Path
 
 import pytest
 
+from better_context import unity_runtime
 from better_context.orchestrator import Orchestrator, _merge_edge_details
 from better_context.scanner import walk_repository
 
@@ -210,3 +213,30 @@ def test_edge_detail_merge_preserves_runtime_evidence_and_provenance() -> None:
     assert details[0]["engine"] == "mixed"
     assert details[0]["engines"] == ["language-adapter", "unity-runtime"]
     assert details[0]["evidence"] == [{"field": "m_Script", "guid": "a" * 32}]
+
+
+def _unity_runtime_json(project, monkeypatch, workers):
+    monkeypatch.setenv("BETTER_CONTEXT_WORKERS", str(workers))
+    monkeypatch.setattr(unity_runtime, "_MIN_ASSETS_FOR_PARALLEL", 0)
+    orchestrator = Orchestrator(project)
+    orchestrator.analyze()
+    runtime = orchestrator._unity_runtime
+    return json.dumps(
+        {
+            "assets": runtime.assets,
+            "edges": runtime.edge_details,
+            "calls": runtime.call_graph,
+            "errors": runtime.errors,
+            "summary": runtime.summary,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def test_parallel_asset_analysis_matches_sequential(runtime_unity_project, monkeypatch):
+    sequential = _unity_runtime_json(runtime_unity_project, monkeypatch, workers=1)
+    parallel = _unity_runtime_json(runtime_unity_project, monkeypatch, workers=3)
+
+    assert '"assets": {}' not in sequential
+    assert parallel == sequential
