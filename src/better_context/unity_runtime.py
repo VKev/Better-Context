@@ -329,7 +329,7 @@ def analyze_unity_runtime(
     skipped_non_owned = 0
     for path, item in inventory_by_path.items():
         suffix = PurePosixPath(path).suffix.lower()
-        if suffix in {".meta", ".cs"} or PurePosixPath(path).name in {"AGENTS.md", "CLAUDE.md"}:
+        if suffix in {".meta", ".cs"} or PurePosixPath(path).name in {"AGENTS.md", "CLAUDE.md", "VKEV-AGENTS.md"}:
             continue
         if (
             suffix not in _ASSET_SUFFIXES | EXTRA_ASSET_SUFFIXES

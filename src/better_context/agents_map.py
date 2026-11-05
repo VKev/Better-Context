@@ -31,7 +31,8 @@ MANAGED_PATTERN = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.DOTA
 # Codex-style agents, ``CLAUDE.md`` by Claude Code. Both names are always
 # *recognized* (never analysed as project source, always cleanable); which ones
 # are *written* comes from ``map_files`` in ``.ctx.json`` or ``--map-file``.
-MAP_FILENAMES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
+# VKEV-AGENTS.md: local-only map name so generated maps never touch team-owned AGENTS.md/CLAUDE.md.
+MAP_FILENAMES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md", "VKEV-AGENTS.md")
 DEFAULT_MAP_FILENAMES: tuple[str, ...] = ("AGENTS.md",)
 _MAP_FILENAMES_CF = {name.casefold() for name in MAP_FILENAMES}
 _MAP_META_FILENAMES_CF = {f"{name}.meta".casefold() for name in MAP_FILENAMES}

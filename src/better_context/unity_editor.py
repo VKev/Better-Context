@@ -151,7 +151,7 @@ def compute_editor_source_hash(root: Path) -> str:
                 continue
             # Every authored/imported asset can affect the Editor snapshot,
             # including custom ScriptedImporter formats and UI/shader sources.
-            if path.name not in {"AGENTS.md", "CLAUDE.md", "AGENTS.md.meta", "CLAUDE.md.meta"}:
+            if path.name not in {"AGENTS.md", "CLAUDE.md", "VKEV-AGENTS.md", "AGENTS.md.meta", "CLAUDE.md.meta", "VKEV-AGENTS.md.meta"}:
                 candidates.append(path)
     for relative in (
         "Packages/manifest.json",
